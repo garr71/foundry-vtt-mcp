@@ -92,6 +92,12 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.cancel-map-job`] = this.handleCancelMapJob.bind(this);
     CONFIG.queries[`${modulePrefix}.upload-generated-map`] = this.handleUploadGeneratedMap.bind(this);
 
+    // Chat reading queries
+    CONFIG.queries[`${modulePrefix}.getRecentChat`] = this.handleGetRecentChat.bind(this);
+
+    // Combat tracker queries
+    CONFIG.queries[`${modulePrefix}.getActiveCombat`] = this.handleGetActiveCombat.bind(this);
+
     // Item usage queries
     CONFIG.queries[`${modulePrefix}.useItem`] = this.handleUseItem.bind(this);
 
@@ -315,6 +321,30 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(`Failed to get world info: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Handle get recent chat request
+   */
+  private async handleGetRecentChat(data: { count?: number; rollsOnly?: boolean }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getRecentChat(data);
+  }
+
+  /**
+   * Handle get active combat request
+   */
+  private async handleGetActiveCombat(): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getActiveCombat();
   }
 
   /**

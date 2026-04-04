@@ -114,8 +114,28 @@ interface PF2eCreatureIndex {
   img?: string;
 }
 
-// Union type for both systems
-type EnhancedCreatureIndex = DnD5eCreatureIndex | PF2eCreatureIndex;
+// Starfinder 2e Enhanced Creature Index (shares PF2e structure; no alignment)
+interface SF2eCreatureIndex {
+  id: string;
+  name: string;
+  type: string;
+  pack: string;
+  packLabel: string;
+  level: number;
+  traits: string[];
+  creatureType: string;
+  rarity: string;
+  size: string;
+  hitPoints: number;
+  armorClass: number;
+  hasSpells: boolean;
+  alignment?: string; // sf2e removed alignment; field is absent but typed optional for union compatibility
+  description?: string;
+  img?: string;
+}
+
+// Union type for all supported systems
+type EnhancedCreatureIndex = DnD5eCreatureIndex | PF2eCreatureIndex | SF2eCreatureIndex;
 
 interface PersistentIndexMetadata {
   version: string;
@@ -554,8 +574,10 @@ class PersistentCreatureIndex {
       return await this.buildPF2eIndex(force);
     } else if (gameSystem === 'dnd5e') {
       return await this.buildDnD5eIndex(force);
+    } else if (gameSystem === 'sf2e') {
+      return await this.buildSF2eIndex(force);
     } else {
-      throw new Error(`Enhanced creature index not supported for system: ${gameSystem}. Only D&D 5e and Pathfinder 2e are currently supported.`);
+      throw new Error(`Enhanced creature index not supported for system: ${gameSystem}. Supported systems: D&D 5e, Pathfinder 2e, Starfinder 2e.`);
     }
   }
 
@@ -1090,6 +1112,202 @@ class PersistentCreatureIndex {
           armorClass: 10,
           hasSpells: false,
           alignment: 'N',
+          description: 'Data extraction failed',
+          img: doc.img || ''
+        },
+        errors: 1
+      };
+    }
+  }
+
+  // ===== SF2e INDEX BUILDER =====
+
+  private async buildSF2eIndex(_force = false): Promise<SF2eCreatureIndex[]> {
+    this.buildInProgress = true;
+
+    const startTime = Date.now();
+    let progressNotification: any = null;
+    let totalErrors = 0;
+
+    try {
+      const actorPacks = Array.from(game.packs.values()).filter(pack => pack.metadata.type === 'Actor');
+      const enhancedCreatures: SF2eCreatureIndex[] = [];
+      const packFingerprints = new Map<string, PackFingerprint>();
+
+      ui.notifications?.info(`Starting SF2e creature index build from ${actorPacks.length} packs...`);
+
+      let currentPack = 0;
+      for (const pack of actorPacks) {
+        currentPack++;
+
+        if (progressNotification) {
+          progressNotification.remove();
+        }
+        progressNotification = ui.notifications?.info(
+          `Building SF2e index: Pack ${currentPack}/${actorPacks.length} (${pack.metadata.label})...`
+        );
+
+        const fingerprint = await this.generatePackFingerprint(pack);
+        packFingerprints.set(pack.metadata.id, fingerprint);
+
+        const result = await this.extractSF2eDataFromPack(pack);
+        enhancedCreatures.push(...result.creatures);
+        totalErrors += result.errors;
+      }
+
+      if (progressNotification) {
+        progressNotification.remove();
+      }
+      ui.notifications?.info(`Saving SF2e index to world database... (${enhancedCreatures.length} creatures)`);
+
+      const persistentIndex: PersistentEnhancedIndex = {
+        metadata: {
+          version: this.INDEX_VERSION,
+          timestamp: Date.now(),
+          packFingerprints,
+          totalCreatures: enhancedCreatures.length,
+          gameSystem: 'sf2e'
+        },
+        creatures: enhancedCreatures
+      };
+
+      await this.savePersistedIndex(persistentIndex);
+
+      const buildTimeSeconds = Math.round((Date.now() - startTime) / 1000);
+      const errorText = totalErrors > 0 ? ` (${totalErrors} extraction errors)` : '';
+      ui.notifications?.info(
+        `SF2e creature index complete! ${enhancedCreatures.length} creatures indexed from ${actorPacks.length} packs in ${buildTimeSeconds}s${errorText}`
+      );
+
+      return enhancedCreatures;
+
+    } catch (error) {
+      if (progressNotification) {
+        progressNotification.remove();
+      }
+      const errorMessage = `Failed to build SF2e creature index: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      console.error(`[${this.moduleId}] ${errorMessage}`);
+      ui.notifications?.error(errorMessage);
+      throw error;
+
+    } finally {
+      this.buildInProgress = false;
+      if (progressNotification) {
+        progressNotification.remove();
+      }
+    }
+  }
+
+  private async extractSF2eDataFromPack(pack: any): Promise<{ creatures: SF2eCreatureIndex[], errors: number }> {
+    const creatures: SF2eCreatureIndex[] = [];
+    let errors = 0;
+
+    try {
+      const documents = await pack.getDocuments();
+
+      for (const doc of documents) {
+        try {
+          if (doc.type !== 'npc' && doc.type !== 'character' && doc.type !== 'creature') {
+            continue;
+          }
+
+          const result = this.extractSF2eCreatureData(doc, pack);
+          if (result) {
+            creatures.push(result.creature);
+            errors += result.errors;
+          }
+
+        } catch (error) {
+          console.warn(`[${this.moduleId}] Failed to extract SF2e data from ${doc.name} in ${pack.metadata.label}:`, error);
+          errors++;
+        }
+      }
+
+    } catch (error) {
+      console.warn(`[${this.moduleId}] Failed to load documents from ${pack.metadata.label}:`, error);
+      errors++;
+    }
+
+    return { creatures, errors };
+  }
+
+  private extractSF2eCreatureData(doc: any, pack: any): { creature: SF2eCreatureIndex, errors: number } | null {
+    try {
+      const system = doc.system || {};
+
+      // Level (primary power metric, same path as PF2e)
+      let level = system.details?.level?.value ?? 0;
+      level = Number(level) || 0;
+
+      // Traits (same array structure as PF2e)
+      const traitsValue = system.traits?.value || [];
+      const traits: string[] = Array.isArray(traitsValue) ? traitsValue : [];
+
+      // SF2e creature types (Starfinder-specific taxonomy)
+      const sf2eCreatureTraits = [
+        'aberration', 'animal', 'beast', 'construct', 'dragon',
+        'elemental', 'fey', 'fungus', 'humanoid', 'mech',
+        'monitor', 'ooze', 'plant', 'robotic', 'undead'
+      ];
+      const creatureType = traits.find(t => sf2eCreatureTraits.includes(t.toLowerCase()))?.toLowerCase() || 'unknown';
+
+      // Rarity
+      const rarity = system.traits?.rarity || 'common';
+
+      // Size (same codes as PF2e)
+      let size = system.traits?.size?.value || 'med';
+      const sizeMap: Record<string, string> = {
+        'tiny': 'tiny', 'sm': 'small', 'med': 'medium',
+        'lg': 'large', 'huge': 'huge', 'grg': 'gargantuan'
+      };
+      size = sizeMap[size.toLowerCase()] || 'medium';
+
+      // HP and AC
+      const hitPoints = system.attributes?.hp?.max || 0;
+      const armorClass = system.attributes?.ac?.value || 10;
+
+      // Spellcasting (SF2e uses same spellcasting entry structure)
+      const spellcasting = system.spellcasting || {};
+      const hasSpells = Object.keys(spellcasting).length > 0;
+
+      return {
+        creature: {
+          id: doc._id,
+          name: doc.name,
+          type: doc.type,
+          pack: pack.metadata.id,
+          packLabel: pack.metadata.label,
+          level,
+          traits,
+          creatureType,
+          rarity,
+          size,
+          hitPoints,
+          armorClass,
+          hasSpells,
+          description: system.details?.publicNotes || system.details?.biography || '',
+          img: doc.img
+        },
+        errors: 0
+      };
+
+    } catch (error) {
+      console.warn(`[${this.moduleId}] Failed to extract SF2e data from ${doc.name}:`, error);
+      return {
+        creature: {
+          id: doc._id,
+          name: doc.name,
+          type: doc.type,
+          pack: pack.metadata.id,
+          packLabel: pack.metadata.label,
+          level: 0,
+          traits: [],
+          creatureType: 'unknown',
+          rarity: 'common',
+          size: 'medium',
+          hitPoints: 1,
+          armorClass: 10,
+          hasSpells: false,
           description: 'Data extraction failed',
           img: doc.img || ''
         },
@@ -4155,39 +4373,76 @@ export class FoundryDataAccess {
     if (character) {
       // Use Foundry's getRollData() to get calculated modifiers including active effects
       const rollData = character.getRollData() as any; // Type assertion for Foundry's dynamic roll data
-      
-      
+      const systemId = (game as any).system?.id ?? '';
+      const isPF2eFamily = systemId === 'pf2e' || systemId === 'sf2e';
+
       switch (rollType) {
-        case 'ability':
-          // Use calculated ability modifier from roll data
+        case 'ability': {
+          // pf2e/sf2e and dnd5e both use abilities[key].mod
           const abilityMod = rollData.abilities?.[rollTarget]?.mod ?? 0;
           baseFormula = `1d20+${abilityMod}`;
           break;
-        
-        case 'skill':
-          // Map skill name to skill code (D&D 5e uses 3-letter codes)
-          const skillCode = this.getSkillCode(rollTarget);
-          // Use calculated skill total from roll data (includes ability mod + proficiency + bonuses)
-          const skillMod = rollData.skills?.[skillCode]?.total ?? 0;
-          baseFormula = `1d20+${skillMod}`;
+        }
+
+        case 'skill': {
+          if (isPF2eFamily) {
+            // pf2e/sf2e: full skill name. getRollData() may or may not include skills;
+            // fall back directly to actor.system.skills if needed.
+            const skillName = rollTarget.toLowerCase();
+            const systemSkills = (character as any).system?.skills;
+            const skillData = rollData.skills?.[skillName] ?? systemSkills?.[skillName];
+            // sf2e uses totalModifier; pf2e uses value; try both
+            const skillMod = skillData?.totalModifier ?? skillData?.value ?? skillData?.mod ?? 0;
+            baseFormula = `1d20+${skillMod}`;
+          } else {
+            // dnd5e: 3-letter skill code, total field
+            const skillCode = this.getSkillCode(rollTarget);
+            const skillMod = rollData.skills?.[skillCode]?.total ?? 0;
+            baseFormula = `1d20+${skillMod}`;
+          }
           break;
-        
-        case 'save':
-          // Use saving throw modifier from roll data
-          const saveMod = rollData.abilities?.[rollTarget]?.save ?? rollData.abilities?.[rollTarget]?.mod ?? 0;
-          baseFormula = `1d20+${saveMod}`;
+        }
+
+        case 'save': {
+          if (isPF2eFamily) {
+            // pf2e/sf2e saves: fortitude/reflex/will
+            const saveName = rollTarget.toLowerCase();
+            const systemSaves = (character as any).system?.saves;
+            const saveData = rollData.saves?.[saveName] ?? systemSaves?.[saveName];
+            const saveMod = saveData?.totalModifier ?? saveData?.value ?? saveData?.mod ?? 0;
+            baseFormula = `1d20+${saveMod}`;
+          } else {
+            // dnd5e: abilities[key].save
+            const saveMod = rollData.abilities?.[rollTarget]?.save ?? rollData.abilities?.[rollTarget]?.mod ?? 0;
+            baseFormula = `1d20+${saveMod}`;
+          }
           break;
-        
-        case 'initiative':
-          // Use initiative modifier from attributes or dex mod
-          const initMod = rollData.attributes?.init?.mod ?? rollData.abilities?.dex?.mod ?? 0;
-          baseFormula = `1d20+${initMod}`;
+        }
+
+        case 'initiative': {
+          if (isPF2eFamily) {
+            // pf2e/sf2e: check attributes.initiative, then perception, then dex
+            const systemAttrs = (character as any).system?.attributes;
+            const systemPerc = (character as any).system?.perception;
+            const initData = rollData.attributes?.initiative ?? systemAttrs?.initiative;
+            const percData = rollData.perception ?? rollData.attributes?.perception ?? systemPerc ?? systemAttrs?.perception;
+            const initMod =
+              initData?.totalModifier ?? initData?.mod ?? initData?.value ??
+              percData?.totalModifier ?? percData?.mod ?? percData?.value ??
+              rollData.abilities?.dex?.mod ?? 0;
+            baseFormula = `1d20+${initMod}`;
+          } else {
+            // dnd5e: attributes.init.mod
+            const initMod = rollData.attributes?.init?.mod ?? rollData.abilities?.dex?.mod ?? 0;
+            baseFormula = `1d20+${initMod}`;
+          }
           break;
-        
+        }
+
         case 'custom':
           baseFormula = rollTarget; // Use rollTarget as the formula directly
           break;
-        
+
         default:
           baseFormula = '1d20';
       }
@@ -5747,4 +6002,130 @@ export class FoundryDataAccess {
     }
   }
 
+  // ===== CHAT / ROLL READING =====
+
+  /**
+   * Return recent chat messages, optionally filtered to roll results only.
+   * Strips HTML from content so the MCP server receives clean text.
+   */
+  async getRecentChat(options: { count?: number; rollsOnly?: boolean } = {}): Promise<any> {
+    this.validateFoundryState();
+
+    const count = Math.min(options.count ?? 20, 100);
+    const rollsOnly = options.rollsOnly ?? false;
+
+    const allMessages = (game.messages?.contents || []);
+
+    // Take the last `count` messages (contents is ordered oldest-first)
+    const slice = allMessages.slice(-count);
+
+    const results = slice
+      .filter((msg: any) => {
+        if (rollsOnly) {
+          // type 5 = roll in Foundry v11+; also check if rolls array is populated
+          const hasRolls = (msg.rolls && msg.rolls.length > 0) || msg.type === 5;
+          return hasRolls;
+        }
+        return true;
+      })
+      .map((msg: any) => {
+        // Extract roll data if present
+        const rolls = (msg.rolls || []).map((roll: any) => ({
+          formula: roll.formula ?? '',
+          total: roll.total ?? null,
+          result: roll.result ?? String(roll.total ?? ''),
+        }));
+
+        // Strip HTML tags for clean text
+        const rawContent: string = msg.content ?? '';
+        const cleanContent = rawContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+        const speaker = msg.speaker ?? {};
+
+        return {
+          id: msg.id,
+          timestamp: msg.timestamp,
+          type: msg.type,
+          author: (game.users?.get(msg.user?.id ?? msg.userId ?? '') as any)?.name ?? msg.speaker?.alias ?? 'Unknown',
+          speaker: {
+            alias: speaker.alias ?? null,
+            actor: speaker.actor ? (game.actors?.get(speaker.actor) as any)?.name ?? speaker.alias : null,
+            token: speaker.token ?? null,
+          },
+          flavor: msg.flavor ? msg.flavor.replace(/<[^>]*>/g, '').trim() : null,
+          content: cleanContent,
+          rolls,
+          isRoll: rolls.length > 0,
+          whisper: (msg.whisper || []).length > 0,
+          blind: msg.blind ?? false,
+        };
+      });
+
+    return {
+      messages: results,
+      total: results.length,
+      rollsOnly,
+    };
+  }
+
+  // ===== COMBAT TRACKER =====
+
+  /**
+   * Get the active combat encounter state: round, turn, initiative order, and combatant status.
+   */
+  async getActiveCombat(): Promise<any> {
+    this.validateFoundryState();
+
+    const combat = (game as any).combat;
+    if (!combat) {
+      return { active: false };
+    }
+
+    const combatants = (combat.combatants?.contents || []).map((c: any) => {
+      const token = c.token;
+      return {
+        id: c.id,
+        name: c.name ?? token?.name ?? 'Unknown',
+        actorId: c.actorId,
+        tokenId: c.tokenId,
+        initiative: c.initiative,
+        hasRolledInitiative: c.initiative !== null && c.initiative !== undefined,
+        isCurrentTurn: combat.combatant?.id === c.id,
+        defeated: c.isDefeated ?? false,
+        hidden: c.hidden ?? false,
+        tokenHidden: token?.hidden ?? false,
+        disposition: (() => {
+          const d = token?.disposition ?? -1;
+          if (d === 1) return 'friendly';
+          if (d === 0) return 'neutral';
+          return 'hostile';
+        })(),
+      };
+    });
+
+    // Sort by initiative descending (unrolled entries go last)
+    combatants.sort((a: any, b: any) => {
+      if (a.initiative === null || a.initiative === undefined) return 1;
+      if (b.initiative === null || b.initiative === undefined) return -1;
+      return b.initiative - a.initiative;
+    });
+
+    const currentCombatant = combat.combatant;
+
+    return {
+      active: combat.started ?? false,
+      round: combat.round ?? 0,
+      turn: combat.turn ?? 0,
+      currentTurn: currentCombatant
+        ? {
+            id: currentCombatant.id,
+            name: currentCombatant.name ?? currentCombatant.token?.name ?? 'Unknown',
+            initiative: currentCombatant.initiative,
+          }
+        : null,
+      combatants,
+      totalCombatants: combatants.length,
+      scene: combat.scene?.name ?? null,
+    };
+  }
 }

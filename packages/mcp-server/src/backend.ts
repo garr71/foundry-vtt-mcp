@@ -34,6 +34,10 @@ import { MapGenerationTools } from './tools/map-generation.js';
 
 import { TokenManipulationTools } from './tools/token-manipulation.js';
 
+import { CombatTools } from './tools/combat.js';
+
+import { ChatTools } from './tools/chat.js';
+
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
 
 const CONTROL_HOST = '127.0.0.1';
@@ -1080,6 +1084,10 @@ async function startBackend(): Promise<void> {
 
   const tokenManipulationTools = new TokenManipulationTools({ foundryClient, logger });
 
+  const combatTools = new CombatTools({ foundryClient, logger });
+
+  const chatTools = new ChatTools({ foundryClient, logger });
+
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
   let mapGenerationComfyUIClient: any = null;
@@ -1313,6 +1321,10 @@ async function startBackend(): Promise<void> {
 
     ...mapGenerationTools.getToolDefinitions(),
 
+    ...combatTools.getToolDefinitions(),
+
+    ...chatTools.getToolDefinitions(),
+
   ];
 
   // Start Foundry connector (owns app port 31415)
@@ -1468,6 +1480,22 @@ async function startBackend(): Promise<void> {
                 case 'get-world-info':
 
                   result = await sceneTools.handleGetWorldInfo(args);
+
+                  break;
+
+                // Chat tools
+
+                case 'read-chat':
+
+                  result = await chatTools.handleReadChat(args);
+
+                  break;
+
+                // Combat tools
+
+                case 'get-combat-tracker':
+
+                  result = await combatTools.handleGetCombatTracker(args);
 
                   break;
 
