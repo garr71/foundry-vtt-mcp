@@ -38,6 +38,8 @@ import { CombatTools } from './tools/combat.js';
 
 import { ChatTools } from './tools/chat.js';
 
+import { PlaylistTools } from './tools/playlist.js';
+
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
 
 const CONTROL_HOST = '127.0.0.1';
@@ -1088,6 +1090,8 @@ async function startBackend(): Promise<void> {
 
   const chatTools = new ChatTools({ foundryClient, logger });
 
+  const playlistTools = new PlaylistTools({ foundryClient, logger });
+
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
   let mapGenerationComfyUIClient: any = null;
@@ -1325,6 +1329,8 @@ async function startBackend(): Promise<void> {
 
     ...chatTools.getToolDefinitions(),
 
+    ...playlistTools.getToolDefinitions(),
+
   ];
 
   // Start Foundry connector (owns app port 31415)
@@ -1488,6 +1494,26 @@ async function startBackend(): Promise<void> {
                 case 'read-chat':
 
                   result = await chatTools.handleReadChat(args);
+
+                  break;
+
+                // Playlist tools
+
+                case 'list-playlists':
+
+                  result = await playlistTools.handleListPlaylists(args);
+
+                  break;
+
+                case 'play-playlist':
+
+                  result = await playlistTools.handlePlayPlaylist(args);
+
+                  break;
+
+                case 'stop-playlist':
+
+                  result = await playlistTools.handleStopPlaylist(args);
 
                   break;
 

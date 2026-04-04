@@ -92,6 +92,11 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.cancel-map-job`] = this.handleCancelMapJob.bind(this);
     CONFIG.queries[`${modulePrefix}.upload-generated-map`] = this.handleUploadGeneratedMap.bind(this);
 
+    // Playlist management queries
+    CONFIG.queries[`${modulePrefix}.getPlaylists`] = this.handleGetPlaylists.bind(this);
+    CONFIG.queries[`${modulePrefix}.playPlaylist`] = this.handlePlayPlaylist.bind(this);
+    CONFIG.queries[`${modulePrefix}.stopPlaylist`] = this.handleStopPlaylist.bind(this);
+
     // Chat reading queries
     CONFIG.queries[`${modulePrefix}.getRecentChat`] = this.handleGetRecentChat.bind(this);
 
@@ -321,6 +326,30 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(`Failed to get world info: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Handle playlist queries
+   */
+  private async handleGetPlaylists(): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) return { error: 'Access denied', success: false };
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getPlaylists();
+  }
+
+  private async handlePlayPlaylist(data: { playlist: string; sound?: string }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) return { error: 'Access denied', success: false };
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.playPlaylist(data);
+  }
+
+  private async handleStopPlaylist(data: { playlist?: string }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) return { error: 'Access denied', success: false };
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.stopPlaylist(data);
   }
 
   /**

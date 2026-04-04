@@ -6002,6 +6002,112 @@ export class FoundryDataAccess {
     }
   }
 
+  // ===== PLAYLIST MANAGEMENT =====
+
+  /**
+   * List all playlists with their current playback state and sounds.
+   */
+  async getPlaylists(): Promise<any> {
+    this.validateFoundryState();
+
+    const playlists = (game.playlists?.contents || []).map((pl: any) => {
+      const sounds = (pl.sounds?.contents || []).map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        playing: s.playing ?? false,
+        volume: s.volume ?? 0.5,
+        repeat: s.data?.repeat ?? s.repeat ?? false,
+        path: s.path ?? null,
+      }));
+
+      return {
+        id: pl.id,
+        name: pl.name,
+        playing: pl.playing ?? false,
+        mode: this.playlistModeName(pl.mode),
+        sounds,
+        totalSounds: sounds.length,
+        playingSounds: sounds.filter((s: any) => s.playing).length,
+      };
+    });
+
+    return {
+      playlists,
+      total: playlists.length,
+      currentlyPlaying: playlists.filter((pl: any) => pl.playing).length,
+    };
+  }
+
+  /**
+   * Play a playlist, optionally targeting a specific sound within it.
+   */
+  async playPlaylist(options: { playlist: string; sound?: string }): Promise<any> {
+    this.validateFoundryState();
+
+    const pl = this.findPlaylist(options.playlist);
+
+    if (options.sound) {
+      const query = options.sound.toLowerCase();
+      const sound = (pl.sounds?.contents || []).find((s: any) =>
+        s.id === options.sound ||
+        (s.name ?? '').toLowerCase() === query ||
+        (s.name ?? '').toLowerCase().includes(query)
+      );
+      if (!sound) {
+        throw new Error(`Sound "${options.sound}" not found in playlist "${pl.name}".`);
+      }
+      await pl.playSound(sound);
+      return { success: true, message: `Playing "${sound.name}" from playlist "${pl.name}".`, playlist: pl.name, sound: sound.name };
+    }
+
+    // Play the whole playlist
+    await pl.playAll();
+    return { success: true, message: `Playing playlist "${pl.name}".`, playlist: pl.name, mode: this.playlistModeName(pl.mode) };
+  }
+
+  /**
+   * Stop a playlist (or all playlists if none specified).
+   */
+  async stopPlaylist(options: { playlist?: string }): Promise<any> {
+    this.validateFoundryState();
+
+    if (!options.playlist) {
+      // Stop everything
+      const playing = (game.playlists?.contents || []).filter((pl: any) => pl.playing);
+      for (const pl of playing) {
+        await pl.stopAll();
+      }
+      return { success: true, message: `Stopped all playlists (${playing.length} were playing).`, stopped: playing.length };
+    }
+
+    const pl = this.findPlaylist(options.playlist);
+    await pl.stopAll();
+    return { success: true, message: `Stopped playlist "${pl.name}".`, playlist: pl.name };
+  }
+
+  private findPlaylist(query: string): any {
+    const lower = query.toLowerCase();
+    const pl = (game.playlists?.contents || []).find((p: any) =>
+      p.id === query ||
+      (p.name ?? '').toLowerCase() === lower ||
+      (p.name ?? '').toLowerCase().includes(lower)
+    );
+    if (!pl) {
+      throw new Error(`Playlist "${query}" not found.`);
+    }
+    return pl;
+  }
+
+  private playlistModeName(mode: number): string {
+    switch (mode) {
+      case 0: return 'sequential';
+      case 1: return 'shuffle';
+      case 2: return 'simultaneous';
+      case 3: return 'soundboard';
+      default: return 'unknown';
+    }
+  }
+
   // ===== CHAT / ROLL READING =====
 
   /**
