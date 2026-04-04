@@ -11,7 +11,7 @@ import { z } from 'zod';
  * Supported game system identifiers
  * Extend this type when adding new systems
  */
-export type SystemId = 'dnd5e' | 'pf2e' | 'dsa5' | 'other';
+export type SystemId = 'dnd5e' | 'pf2e' | 'dsa5' | 'sf2e' | 'other';
 
 /**
  * System metadata returned by adapters
@@ -230,6 +230,23 @@ export interface GenericCreatureIndex extends SystemCreatureIndex {
 }
 
 /**
+ * Starfinder 2e specific creature index structure
+ */
+export interface SF2eCreatureIndex extends SystemCreatureIndex {
+  system: 'sf2e';
+  systemData: {
+    level?: number;
+    traits?: string[];
+    primaryType?: string;
+    size?: string;
+    rarity?: string;
+    hasSpellcasting: boolean;
+    hitPoints?: number;
+    armorClass?: number;
+  };
+}
+
+/**
  * Union type of all creature index types
  */
-export type AnyCreatureIndex = DnD5eCreatureIndex | PF2eCreatureIndex | DSA5CreatureIndex | GenericCreatureIndex;
+export type AnyCreatureIndex = DnD5eCreatureIndex | PF2eCreatureIndex | DSA5CreatureIndex | SF2eCreatureIndex | GenericCreatureIndex;
