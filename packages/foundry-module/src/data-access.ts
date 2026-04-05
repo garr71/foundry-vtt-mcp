@@ -3520,6 +3520,43 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Show a journal entry (text or image) to all connected clients including the GM.
+   * Partial name matching supported for journalId — accepts ID or name substring.
+   */
+  async showJournalToPlayers(request: {
+    journal: string;
+    mode?: 'text' | 'image';
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const query = request.journal.toLowerCase();
+    const allJournals = game.journal?.contents || [];
+
+    const entry = allJournals.find((j: any) =>
+      j.id === request.journal ||
+      j.name?.toLowerCase() === query ||
+      j.name?.toLowerCase().includes(query)
+    );
+
+    if (!entry) {
+      throw new Error(`Journal entry not found: "${request.journal}"`);
+    }
+
+    const mode = request.mode ?? 'text';
+
+    // force=true pushes the sheet to all clients including the GM
+    await (entry as any).show(mode, true);
+
+    return {
+      success: true,
+      message: `Showing "${entry.name}" (${mode}) to all players.`,
+      journalId: entry.id,
+      journalName: entry.name,
+      mode,
+    };
+  }
+
+  /**
    * Create actors from compendium entries with custom names
    */
   async createActorFromCompendium(request: ActorCreationRequest): Promise<ActorCreationResult> {

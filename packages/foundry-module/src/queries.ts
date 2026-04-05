@@ -58,6 +58,7 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.getJournalContent`] = this.handleGetJournalContent.bind(this);
     CONFIG.queries[`${modulePrefix}.getJournalPageContent`] = this.handleGetJournalPageContent.bind(this);
     CONFIG.queries[`${modulePrefix}.updateJournalContent`] = this.handleUpdateJournalContent.bind(this);
+    CONFIG.queries[`${modulePrefix}.showJournalToPlayers`] = this.handleShowJournalToPlayers.bind(this);
 
     // Phase 4: Dice roll queries
     CONFIG.queries[`${modulePrefix}.request-player-rolls`] = this.handleRequestPlayerRolls.bind(this);
@@ -636,6 +637,14 @@ export class QueryHandlers {
   /**
    * Handle update journal content request
    */
+  async handleShowJournalToPlayers(data: { journal: string; mode?: 'text' | 'image' }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) return { error: 'Access denied', success: false };
+    this.dataAccess.validateFoundryState();
+    if (!data.journal) throw new Error('journal is required');
+    return await this.dataAccess.showJournalToPlayers(data);
+  }
+
   async handleUpdateJournalContent(data: { journalId: string; content: string; pageId?: string; newPageName?: string }): Promise<any> {
     try {
       // SECURITY: Silent GM validation
