@@ -3520,6 +3520,70 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Post a chat message to Foundry VTT as the GM or a named speaker.
+   */
+  async sendChatMessage(request: {
+    content: string;
+    speaker?: string; // actor name or "GM" — defaults to GM
+    whisper?: boolean; // if true, visible only to GM clients
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const content = request.content?.trim();
+    if (!content) throw new Error('content is required');
+
+    // Resolve speaker
+    let speaker: any;
+    if (request.speaker && request.speaker.toLowerCase() !== 'gm') {
+      const query = request.speaker.toLowerCase();
+      const actor = (game.actors?.find((a: any) =>
+        a.name?.toLowerCase() === query ||
+        a.name?.toLowerCase().includes(query)
+      )) as any;
+
+      if (actor) {
+        // Prefer a token on the current scene — gives token portrait and correct alias
+        const scene = (game.scenes as any)?.current;
+        const sceneToken = scene?.tokens?.find((t: any) =>
+          t.actorId === actor.id || t.actor?.id === actor.id
+        );
+        speaker = sceneToken
+          ? ChatMessage.getSpeaker({ token: sceneToken, actor })
+          : ChatMessage.getSpeaker({ actor });
+      } else {
+        // No actor found — use plain alias
+        speaker = ChatMessage.getSpeaker({ alias: request.speaker });
+      }
+    } else {
+      // GM speaker — use alias "GM"
+      speaker = { alias: 'GM' };
+    }
+
+    // Whisper targets (GM-only clients)
+    const whisperTargets: string[] = [];
+    if (request.whisper) {
+      const gmUsers = (game.users?.filter((u: any) => u.isGM) || []);
+      for (const u of gmUsers) {
+        if (u.id) whisperTargets.push(u.id);
+      }
+    }
+
+    const msg = await ChatMessage.create({
+      content,
+      speaker,
+      style: (CONST as any).CHAT_MESSAGE_STYLES?.OTHER ?? 0,
+      whisper: whisperTargets,
+    });
+
+    return {
+      success: true,
+      messageId: msg?.id ?? null,
+      speaker: speaker.alias ?? speaker.actor ?? 'GM',
+      whisper: request.whisper ?? false,
+    };
+  }
+
+  /**
    * Show a journal entry (text or image) to all connected clients including the GM.
    * Partial name matching supported for journalId — accepts ID or name substring.
    */

@@ -19,6 +19,32 @@ export class JournalTools {
   getToolDefinitions() {
     return [
       {
+        name: 'send-chat-message',
+        description:
+          'Post a message to Foundry VTT chat, visible to all players and the GM. ' +
+          'Use this for read-aloud flavor text, scene narration, NPC dialogue, and announcements. ' +
+          'Optionally specify a speaker name (actor or alias) and whether to whisper GM-only.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            content: {
+              type: 'string',
+              description: 'The message text to post. Plain text or basic HTML.',
+            },
+            speaker: {
+              type: 'string',
+              description: 'Speaker name shown in chat. Use an actor name for NPC dialogue, or omit for GM narration.',
+            },
+            whisper: {
+              type: 'boolean',
+              description: 'If true, message is visible only to GM clients. Default: false (public).',
+              default: false,
+            },
+          },
+          required: ['content'],
+        },
+      },
+      {
         name: 'show-journal-to-players',
         description:
           'Display a Foundry VTT journal entry or handout to all connected players AND the GM. ' +
@@ -42,6 +68,27 @@ export class JournalTools {
         },
       },
     ];
+  }
+
+  async handleSendChatMessage(args: any): Promise<any> {
+    const schema = z.object({
+      content: z.string(),
+      speaker: z.string().optional(),
+      whisper: z.boolean().default(false),
+    });
+
+    const { content, speaker, whisper } = schema.parse(args);
+
+    this.logger.info('Sending chat message', { speaker, whisper });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.sendChatMessage', { content, speaker, whisper });
+    } catch (error) {
+      this.logger.error('Failed to send chat message', error);
+      throw new Error(
+        `Failed to send chat message: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handleShowJournalToPlayers(args: any): Promise<any> {

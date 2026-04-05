@@ -1505,6 +1505,12 @@ async function startBackend(): Promise<void> {
 
                 // Journal tools
 
+                case 'send-chat-message':
+
+                  result = await journalTools.handleSendChatMessage(args);
+
+                  break;
+
                 case 'show-journal-to-players':
 
                   result = await journalTools.handleShowJournalToPlayers(args);
