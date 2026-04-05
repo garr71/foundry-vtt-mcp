@@ -3571,12 +3571,13 @@ export class FoundryDataAccess {
 
     // Resolve speaker
     let speaker: any;
-    if (request.speaker && request.speaker.toLowerCase() !== 'gm') {
-      const query = request.speaker.toLowerCase();
-      const actor = (game.actors?.find((a: any) =>
-        a.name?.toLowerCase() === query ||
-        a.name?.toLowerCase().includes(query)
-      )) as any;
+    if (request.speaker) {
+      // Exact name lookup first (Foundry built-in), then partial match fallback
+      const byName = (game.actors as any)?.getName(request.speaker);
+      const byFind = game.actors?.find((a: any) =>
+        a.name?.toLowerCase().includes(request.speaker!.toLowerCase())
+      );
+      const actor = (byName ?? byFind) as any;
 
       if (actor) {
         // Prefer a token on the current scene — gives token portrait and correct alias
