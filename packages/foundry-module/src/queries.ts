@@ -645,7 +645,7 @@ export class QueryHandlers {
     return await this.dataAccess.sendChatMessage(data);
   }
 
-  async handleShowJournalToPlayers(data: { journal: string; mode?: 'text' | 'image' }): Promise<any> {
+  async handleShowJournalToPlayers(data: { journal: string; page?: string }): Promise<any> {
     const gmCheck = this.validateGMAccess();
     if (!gmCheck.allowed) return { error: 'Access denied', success: false };
     this.dataAccess.validateFoundryState();

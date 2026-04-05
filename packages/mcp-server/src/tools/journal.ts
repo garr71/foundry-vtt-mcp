@@ -47,21 +47,19 @@ export class JournalTools {
       {
         name: 'show-journal-to-players',
         description:
-          'Display a Foundry VTT journal entry or handout to all connected players AND the GM. ' +
-          'Use mode "text" for journal pages and "image" for image handouts. ' +
-          'Supports partial name matching — you do not need the exact name.',
+          'Display a Foundry VTT journal entry or a specific page within it to all connected players AND the GM. ' +
+          'Omit "page" to show the whole journal. Provide "page" to open directly to that page in single-page view. ' +
+          'Supports partial name matching for both journal and page.',
         inputSchema: {
           type: 'object',
           properties: {
             journal: {
               type: 'string',
-              description: 'Name or partial name of the journal entry to show.',
+              description: 'Name or partial name of the journal entry.',
             },
-            mode: {
+            page: {
               type: 'string',
-              enum: ['text', 'image'],
-              description: 'Display mode: "text" for journal text pages (default), "image" for image handouts.',
-              default: 'text',
+              description: 'Optional: name or partial name of a specific page within the journal. Opens in single-page view showing only that page.',
             },
           },
           required: ['journal'],
@@ -94,15 +92,15 @@ export class JournalTools {
   async handleShowJournalToPlayers(args: any): Promise<any> {
     const schema = z.object({
       journal: z.string(),
-      mode: z.enum(['text', 'image']).default('text'),
+      page: z.string().optional(),
     });
 
-    const { journal, mode } = schema.parse(args);
+    const { journal, page } = schema.parse(args);
 
-    this.logger.info('Showing journal to players', { journal, mode });
+    this.logger.info('Showing journal to players', { journal, page });
 
     try {
-      return await this.foundryClient.query('foundry-mcp-bridge.showJournalToPlayers', { journal, mode });
+      return await this.foundryClient.query('foundry-mcp-bridge.showJournalToPlayers', { journal, page });
     } catch (error) {
       this.logger.error('Failed to show journal', error);
       throw new Error(

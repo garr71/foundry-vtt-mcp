@@ -3584,12 +3584,13 @@ export class FoundryDataAccess {
   }
 
   /**
-   * Show a journal entry (text or image) to all connected clients including the GM.
-   * Partial name matching supported for journalId — accepts ID or name substring.
+   * Show a journal entry or a specific page within it to all connected clients including the GM.
+   * In Foundry v11+, passing a JournalEntryPage to Journal.show() opens the journal in single-page
+   * mode showing only that page — no need to navigate.
    */
   async showJournalToPlayers(request: {
     journal: string;
-    mode?: 'text' | 'image';
+    page?: string; // optional: name or partial name of a page within the journal
   }): Promise<any> {
     this.validateFoundryState();
 
@@ -3600,23 +3601,46 @@ export class FoundryDataAccess {
       j.id === request.journal ||
       j.name?.toLowerCase() === query ||
       j.name?.toLowerCase().includes(query)
-    );
+    ) as any;
 
     if (!entry) {
       throw new Error(`Journal entry not found: "${request.journal}"`);
     }
 
-    const mode = request.mode ?? 'text';
+    // If a page is specified, find it and show only that page
+    if (request.page) {
+      const pageQuery = request.page.toLowerCase();
+      const page = (entry.pages?.contents || []).find((p: any) =>
+        p.id === request.page ||
+        (p.name ?? '').toLowerCase() === pageQuery ||
+        (p.name ?? '').toLowerCase().includes(pageQuery)
+      );
 
-    // force=true pushes the sheet to all clients including the GM
-    await (entry as any).show(mode, true);
+      if (!page) {
+        throw new Error(`Page "${request.page}" not found in journal "${entry.name}".`);
+      }
+
+      // Pass the page document directly — Foundry v13 opens in single-page mode
+      await (game as any).journal.constructor.show(page, { force: true });
+
+      return {
+        success: true,
+        message: `Showing page "${page.name}" from "${entry.name}" to all players.`,
+        journalId: entry.id,
+        journalName: entry.name,
+        pageId: page.id,
+        pageName: page.name,
+      };
+    }
+
+    // No page specified — show the whole journal (multi-page view)
+    await (game as any).journal.constructor.show(entry, { force: true });
 
     return {
       success: true,
-      message: `Showing "${entry.name}" (${mode}) to all players.`,
+      message: `Showing journal "${entry.name}" to all players.`,
       journalId: entry.id,
       journalName: entry.name,
-      mode,
     };
   }
 
