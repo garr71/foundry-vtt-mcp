@@ -336,7 +336,15 @@ export class TokenManipulationTools {
         name: tokenData.actorData.name,
         type: tokenData.actorData.type,
         img: tokenData.actorData.img,
-        isLinked: tokenData.actorLink,
+        isLinked: tokenData.actorData.isLinked ?? tokenData.actorLink,
+        level: tokenData.actorData.level ?? null,
+        hp: tokenData.actorData.hp ?? null,
+        ac: tokenData.actorData.ac ?? null,
+        saves: tokenData.actorData.saves ?? null,
+        traits: tokenData.actorData.traits ?? [],
+        size: tokenData.actorData.size ?? null,
+        rarity: tokenData.actorData.rarity ?? null,
+        conditions: tokenData.actorData.conditions ?? [],
       } : null,
     };
   }

@@ -5624,16 +5624,70 @@ export class FoundryDataAccess {
         lockRotation: token.lockRotation,
         img: token.texture?.src,
         actorId: token.actor?.id,
-        actorData: token.actor ? {
-          name: token.actor.name,
-          type: token.actor.type,
-          img: token.actor.img,
-        } : null,
         actorLink: token.actorLink,
+        actorData: token.actor ? this.extractTokenActorStats(token.actor) : null,
       };
     } catch (error) {
       throw new Error(`Failed to get token details: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+  }
+
+  /**
+   * Extract a concise stat block from a token's actor (works for both linked and synthetic unlinked actors).
+   */
+  private extractTokenActorStats(actor: any): any {
+    const sys = actor.system || {};
+
+    // HP — try sf2e/pf2e/dnd5e paths
+    const hpObj = sys.attributes?.hp ?? sys.hp ?? {};
+    const hp = {
+      value: hpObj.value ?? null,
+      max: hpObj.max ?? null,
+      temp: hpObj.temp ?? null,
+    };
+
+    // AC
+    const acObj = sys.attributes?.ac ?? sys.ac ?? {};
+    const ac = acObj.value ?? acObj.flat ?? null;
+
+    // Level / CR
+    const level = sys.details?.level?.value ?? sys.details?.level ?? sys.details?.cr ?? null;
+
+    // Saves (sf2e/pf2e: sys.saves.{fortitude|reflex|will}; dnd5e: sys.abilities.{str|...}.save)
+    const saves: Record<string, any> = {};
+    if (sys.saves) {
+      for (const [key, val] of Object.entries(sys.saves as Record<string, any>)) {
+        saves[key] = val?.value ?? val?.totalModifier ?? val?.mod ?? null;
+      }
+    }
+
+    // Traits (sf2e/pf2e array; dnd5e object)
+    const traitsRaw = sys.traits?.value;
+    const traits: string[] = Array.isArray(traitsRaw) ? traitsRaw : [];
+
+    // Size
+    const size = sys.traits?.size?.value ?? sys.traits?.size ?? null;
+
+    // Rarity (sf2e/pf2e)
+    const rarity = sys.traits?.rarity ?? null;
+
+    // Active conditions/effects
+    const conditions = (actor.statuses ?? []) as string[];
+
+    return {
+      name: actor.name,
+      type: actor.type,
+      img: actor.img,
+      level,
+      hp,
+      ac,
+      saves,
+      traits,
+      size,
+      rarity,
+      conditions,
+      isLinked: actor.prototypeToken?.actorLink ?? true,
+    };
   }
 
   /**
