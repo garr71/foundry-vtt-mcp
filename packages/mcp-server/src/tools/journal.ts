@@ -19,6 +19,30 @@ export class JournalTools {
   getToolDefinitions() {
     return [
       {
+        name: 'set-quest-visibility',
+        description:
+          'Show or hide a Simple Quest journal page from players by toggling its hidden flag. ' +
+          'Requires the Simple Quest module to be active in Foundry.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            journalId: {
+              type: 'string',
+              description: 'ID of the journal entry containing the quest page.',
+            },
+            pageId: {
+              type: 'string',
+              description: 'ID of the specific quest page to show or hide.',
+            },
+            hidden: {
+              type: 'boolean',
+              description: 'true to hide the quest from players, false to reveal it.',
+            },
+          },
+          required: ['journalId', 'pageId', 'hidden'],
+        },
+      },
+      {
         name: 'send-chat-message',
         description:
           'Post a message to Foundry VTT chat, visible to all players and the GM. ' +
@@ -66,6 +90,27 @@ export class JournalTools {
         },
       },
     ];
+  }
+
+  async handleSetQuestVisibility(args: any): Promise<any> {
+    const schema = z.object({
+      journalId: z.string(),
+      pageId: z.string(),
+      hidden: z.boolean(),
+    });
+
+    const { journalId, pageId, hidden } = schema.parse(args);
+
+    this.logger.info('Setting quest visibility', { journalId, pageId, hidden });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.setQuestVisibility', { journalId, pageId, hidden });
+    } catch (error) {
+      this.logger.error('Failed to set quest visibility', error);
+      throw new Error(
+        `Failed to set quest visibility: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handleSendChatMessage(args: any): Promise<any> {

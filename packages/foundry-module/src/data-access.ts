@@ -3520,6 +3520,43 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Toggle Simple Quest's hidden flag on a journal page.
+   */
+  async setQuestVisibility(request: {
+    journalId: string;
+    pageId: string;
+    hidden: boolean;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    if (!(game.modules as any).get('simple-quest')?.active) {
+      throw new Error('Simple Quest module is not active. Enable it in Foundry module settings.');
+    }
+
+    const journal = (game.journal as any)?.get(request.journalId);
+    if (!journal) {
+      throw new Error(`Journal not found: "${request.journalId}"`);
+    }
+
+    const page = journal.pages?.get(request.pageId);
+    if (!page) {
+      throw new Error(`Page "${request.pageId}" not found in journal "${journal.name}".`);
+    }
+
+    await page.setFlag('simple-quest', 'hidden', request.hidden);
+
+    return {
+      success: true,
+      message: `Quest "${page.name}" is now ${request.hidden ? 'hidden from' : 'visible to'} players.`,
+      journalId: journal.id,
+      journalName: journal.name,
+      pageId: page.id,
+      pageName: page.name,
+      hidden: request.hidden,
+    };
+  }
+
+  /**
    * Post a chat message to Foundry VTT as the GM or a named speaker.
    */
   async sendChatMessage(request: {

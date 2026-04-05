@@ -1505,6 +1505,12 @@ async function startBackend(): Promise<void> {
 
                 // Journal tools
 
+                case 'set-quest-visibility':
+
+                  result = await journalTools.handleSetQuestVisibility(args);
+
+                  break;
+
                 case 'send-chat-message':
 
                   result = await journalTools.handleSendChatMessage(args);

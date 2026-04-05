@@ -59,6 +59,7 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.getJournalPageContent`] = this.handleGetJournalPageContent.bind(this);
     CONFIG.queries[`${modulePrefix}.updateJournalContent`] = this.handleUpdateJournalContent.bind(this);
     CONFIG.queries[`${modulePrefix}.showJournalToPlayers`] = this.handleShowJournalToPlayers.bind(this);
+    CONFIG.queries[`${modulePrefix}.setQuestVisibility`] = this.handleSetQuestVisibility.bind(this);
     CONFIG.queries[`${modulePrefix}.sendChatMessage`] = this.handleSendChatMessage.bind(this);
 
     // Phase 4: Dice roll queries
@@ -643,6 +644,16 @@ export class QueryHandlers {
     if (!gmCheck.allowed) return { error: 'Access denied', success: false };
     this.dataAccess.validateFoundryState();
     return await this.dataAccess.sendChatMessage(data);
+  }
+
+  async handleSetQuestVisibility(data: { journalId: string; pageId: string; hidden: boolean }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) return { error: 'Access denied', success: false };
+    this.dataAccess.validateFoundryState();
+    if (!data.journalId) throw new Error('journalId is required');
+    if (!data.pageId) throw new Error('pageId is required');
+    if (typeof data.hidden !== 'boolean') throw new Error('hidden must be a boolean');
+    return await this.dataAccess.setQuestVisibility(data);
   }
 
   async handleShowJournalToPlayers(data: { journal: string; page?: string }): Promise<any> {
