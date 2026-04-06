@@ -1511,6 +1511,12 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'set-quest-checklist-item':
+
+                  result = await journalTools.handleSetQuestChecklistItem(args);
+
+                  break;
+
                 case 'send-chat-message':
 
                   result = await journalTools.handleSendChatMessage(args);

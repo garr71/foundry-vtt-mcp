@@ -60,6 +60,7 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.updateJournalContent`] = this.handleUpdateJournalContent.bind(this);
     CONFIG.queries[`${modulePrefix}.showJournalToPlayers`] = this.handleShowJournalToPlayers.bind(this);
     CONFIG.queries[`${modulePrefix}.setQuestVisibility`] = this.handleSetQuestVisibility.bind(this);
+    CONFIG.queries[`${modulePrefix}.setQuestChecklistItem`] = this.handleSetQuestChecklistItem.bind(this);
     CONFIG.queries[`${modulePrefix}.sendChatMessage`] = this.handleSendChatMessage.bind(this);
 
     // Phase 4: Dice roll queries
@@ -655,6 +656,16 @@ export class QueryHandlers {
     if (!data.pageId) throw new Error('pageId is required');
     if (typeof data.hidden !== 'boolean') throw new Error('hidden must be a boolean');
     return await this.dataAccess.setQuestVisibility(data);
+  }
+
+  async handleSetQuestChecklistItem(data: { journalId: string; pageId: string; itemText: string; revealed?: boolean; completed?: 'unchecked' | 'checked' | 'failed' }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) return { error: 'Access denied', success: false };
+    this.dataAccess.validateFoundryState();
+    if (!data.journalId) throw new Error('journalId is required');
+    if (!data.pageId) throw new Error('pageId is required');
+    if (!data.itemText) throw new Error('itemText is required');
+    return await this.dataAccess.setQuestChecklistItem(data);
   }
 
   async handleShowJournalToPlayers(data: { journal: string; page?: string }): Promise<any> {

@@ -3526,6 +3526,7 @@ export class FoundryDataAccess {
     journalId: string;
     pageId: string;
     hidden: boolean;
+    sectionName?: string;
   }): Promise<any> {
     this.validateFoundryState();
 
@@ -3543,7 +3544,26 @@ export class FoundryDataAccess {
       throw new Error(`Page "${request.pageId}" not found in journal "${journal.name}".`);
     }
 
-    // Lore tab pages use Foundry ownership for visibility (Simple Quest ignores the hidden flag for non-quest pages).
+    // Section-level visibility: hide/show a specific h2/h3 heading within the page
+    if (request.sectionName) {
+      const slug = (request.sectionName as string).slugify({ strict: true });
+      await page.setFlag('simple-quest', `secret.${slug}`, request.hidden);
+      return {
+        success: true,
+        message: `Section "${request.sectionName}" is now ${request.hidden ? 'hidden from' : 'visible to'} players.`,
+        journalId: journal.id,
+        journalName: journal.name,
+        pageId: page.id,
+        pageName: page.name,
+        sectionName: request.sectionName,
+        sectionSlug: slug,
+        hidden: request.hidden,
+        method: 'section-flag',
+      };
+    }
+
+    // Page-level visibility:
+    // Lore tab pages use Foundry ownership (Simple Quest ignores the hidden flag for non-quest pages).
     // Quest tab pages use the simple-quest hidden flag.
     const loreFolderName = (game.settings as any)?.get('simple-quest', 'loreFolderName') ?? 'Lore';
     const loreFolder = Array.from((game.folders as any) ?? []).find(
@@ -3569,6 +3589,65 @@ export class FoundryDataAccess {
       pageName: page.name,
       hidden: request.hidden,
       method: isLorePage ? 'ownership' : 'flag',
+    };
+  }
+
+  /**
+   * Set the reveal/completion state of an individual checklist item in a Simple Quest page.
+   * FEAT-2: revealed = whether item is visible to players (secret flag)
+   * FEAT-3: completed = checked/failed/unchecked (checkboxes flag)
+   */
+  async setQuestChecklistItem(request: {
+    journalId: string;
+    pageId: string;
+    itemText: string;
+    revealed?: boolean;
+    completed?: 'unchecked' | 'checked' | 'failed';
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    if (!(game.modules as any).get('simple-quest')?.active) {
+      throw new Error('Simple Quest module is not active.');
+    }
+
+    const journal = (game.journal as any)?.get(request.journalId);
+    if (!journal) throw new Error(`Journal not found: "${request.journalId}"`);
+
+    const page = journal.pages?.get(request.pageId);
+    if (!page) throw new Error(`Page "${request.pageId}" not found in journal "${journal.name}".`);
+
+    // Simple Quest item key: strip whitespace + periods, take first 50 chars
+    const itemKey = request.itemText.replace(/\s/g, '').replace(/\./g, '').substring(0, 50);
+
+    const updates: Record<string, any> = {};
+
+    if (request.revealed !== undefined) {
+      // secret flag: true = item is a secret (hidden from players), false = visible
+      // revealed=true means NOT a secret, so we set secret=false
+      updates[`flags.simple-quest.secret.${itemKey}`] = !request.revealed;
+    }
+
+    if (request.completed !== undefined) {
+      const stateMap = { unchecked: 0, checked: 1, failed: 2 };
+      updates[`flags.simple-quest.checkboxes.${itemKey}`] = stateMap[request.completed];
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return { success: true, message: 'No changes requested.', itemKey };
+    }
+
+    await page.update(updates);
+
+    return {
+      success: true,
+      message: `Checklist item updated.`,
+      journalId: journal.id,
+      pageId: page.id,
+      pageName: page.name,
+      itemText: request.itemText,
+      itemKey,
+      ...(request.revealed !== undefined ? { revealed: request.revealed } : {}),
+      ...(request.completed !== undefined ? { completed: request.completed } : {}),
     };
   }
 

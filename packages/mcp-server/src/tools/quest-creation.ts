@@ -309,7 +309,7 @@ export class QuestCreationTools {
         newContent: z.string().min(1, 'New content is required'),
         updateType: z.enum(['progress', 'completion', 'failure', 'modification']),
         pageId: z.string().optional(),
-        newPageName: z.string().optional()
+        newPageName: z.string().optional(),
       });
 
       const request = requestSchema.parse(args);
