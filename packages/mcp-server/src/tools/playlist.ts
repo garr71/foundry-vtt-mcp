@@ -30,7 +30,8 @@ export class PlaylistTools {
       {
         name: 'play-playlist',
         description:
-          'Start playing a Foundry VTT playlist by name. Optionally specify a sound within the playlist to play a single track. Supports partial name matching.',
+          'Start playing a Foundry VTT playlist by name. Optionally specify a sound within the playlist to play a single track. Supports partial name matching. ' +
+          'Optional parameters loop, volume, and mode make persistent changes to the track or playlist before playing.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -41,6 +42,21 @@ export class PlaylistTools {
             sound: {
               type: 'string',
               description: 'Optional: name or partial name of a specific sound within the playlist to play. Omit to play the whole playlist.',
+            },
+            loop: {
+              type: 'boolean',
+              description: 'Set whether the track repeats after finishing. Only applies when a specific sound is also specified. Persistent change to the track.',
+            },
+            volume: {
+              type: 'number',
+              description: 'Set the track volume using Foundry\'s internal scale (0.0–1.0). Only applies when a specific sound is also specified. Persistent change to the track. NOTE: Foundry uses a non-linear (cubic) volume curve, so 0.5 displays as ~63% in the UI. To match a UI percentage, use approximately (percentage/100)^(1/3) as the input value.',
+              minimum: 0,
+              maximum: 1,
+            },
+            mode: {
+              type: 'string',
+              enum: ['sequential', 'shuffle', 'simultaneous', 'soundboard'],
+              description: 'Set the playlist playback mode. Persistent change to the playlist.',
             },
           },
           required: ['playlist'],
@@ -78,11 +94,14 @@ export class PlaylistTools {
     const schema = z.object({
       playlist: z.string(),
       sound: z.string().optional(),
+      loop: z.boolean().optional(),
+      volume: z.number().min(0).max(1).optional(),
+      mode: z.enum(['sequential', 'shuffle', 'simultaneous', 'soundboard']).optional(),
     });
-    const { playlist, sound } = schema.parse(args);
-    this.logger.info('Playing playlist', { playlist, sound });
+    const { playlist, sound, loop, volume, mode } = schema.parse(args);
+    this.logger.info('Playing playlist', { playlist, sound, loop, volume, mode });
     try {
-      return await this.foundryClient.query('foundry-mcp-bridge.playPlaylist', { playlist, sound });
+      return await this.foundryClient.query('foundry-mcp-bridge.playPlaylist', { playlist, sound, loop, volume, mode });
     } catch (error) {
       this.logger.error('Failed to play playlist', error);
       throw new Error(`Failed to play playlist: ${error instanceof Error ? error.message : 'Unknown error'}`);

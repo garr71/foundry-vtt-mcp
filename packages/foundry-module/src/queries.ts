@@ -119,6 +119,7 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.get-token-details`] = this.handleGetTokenDetails.bind(this);
     CONFIG.queries[`${modulePrefix}.toggle-token-condition`] = this.handleToggleTokenCondition.bind(this);
     CONFIG.queries[`${modulePrefix}.get-available-conditions`] = this.handleGetAvailableConditions.bind(this);
+    CONFIG.queries[`${modulePrefix}.getTokenDistances`] = this.handleGetTokenDistances.bind(this);
 
   }
 
@@ -1368,6 +1369,19 @@ export class QueryHandlers {
       return await this.dataAccess.getAvailableConditions();
     } catch (error) {
       throw new Error(`Failed to get available conditions: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  private async handleGetTokenDistances(data: { tokenIds?: string[] }): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+      this.dataAccess.validateFoundryState();
+      return await this.dataAccess.getTokenDistances(data);
+    } catch (error) {
+      throw new Error(`Failed to get token distances: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 

@@ -3543,7 +3543,22 @@ export class FoundryDataAccess {
       throw new Error(`Page "${request.pageId}" not found in journal "${journal.name}".`);
     }
 
-    await page.setFlag('simple-quest', 'hidden', request.hidden);
+    // Lore tab pages use Foundry ownership for visibility (Simple Quest ignores the hidden flag for non-quest pages).
+    // Quest tab pages use the simple-quest hidden flag.
+    const loreFolderName = (game.settings as any)?.get('simple-quest', 'loreFolderName') ?? 'Lore';
+    const loreFolder = Array.from((game.folders as any) ?? []).find(
+      (f: any) => f.name === loreFolderName && f.type === 'JournalEntry'
+    );
+    const isLorePage = loreFolder && journal.folder?.id === (loreFolder as any).id;
+
+    if (isLorePage) {
+      const newDefault = request.hidden
+        ? (CONST as any).DOCUMENT_OWNERSHIP_LEVELS.NONE
+        : (CONST as any).DOCUMENT_OWNERSHIP_LEVELS.OBSERVER;
+      await page.update({ ownership: { ...page.ownership, default: newDefault } });
+    } else {
+      await page.setFlag('simple-quest', 'hidden', request.hidden);
+    }
 
     return {
       success: true,
@@ -3553,6 +3568,7 @@ export class FoundryDataAccess {
       pageId: page.id,
       pageName: page.name,
       hidden: request.hidden,
+      method: isLorePage ? 'ownership' : 'flag',
     };
   }
 
@@ -3589,8 +3605,8 @@ export class FoundryDataAccess {
           ? ChatMessage.getSpeaker({ token: sceneToken, actor })
           : ChatMessage.getSpeaker({ actor });
       } else {
-        // No actor found — use plain alias
-        speaker = ChatMessage.getSpeaker({ alias: request.speaker });
+        // No actor found — use plain alias object directly (not getSpeaker, which falls back to selected token)
+        speaker = { alias: request.speaker };
       }
     } else {
       // GM speaker — use alias "GM"
@@ -4314,9 +4330,15 @@ export class FoundryDataAccess {
         // Public roll request: visible to all players (empty whisperTargets array)
       }
       
+      // BUG-4: speaker priority — 1) "GM" world actor  2) selected token  3) Gamemaster label
+      const gmActor = (game.actors as any)?.getName('GM');
+      const requestSpeaker = gmActor
+        ? ChatMessage.getSpeaker({ actor: gmActor })
+        : ChatMessage.getSpeaker();
+
       const messageData = {
         content: rollButtonHtml,
-        speaker: ChatMessage.getSpeaker({ actor: game.user }),
+        speaker: requestSpeaker,
         style: (CONST as any).CHAT_MESSAGE_STYLES?.OTHER || 0, // Use style instead of deprecated type
         whisper: whisperTargets,
         flags: {
@@ -4555,8 +4577,15 @@ export class FoundryDataAccess {
             const systemSkills = (character as any).system?.skills;
             const skillData = rollData.skills?.[skillName] ?? systemSkills?.[skillName];
             // sf2e uses totalModifier; pf2e uses value; try both
-            const skillMod = skillData?.totalModifier ?? skillData?.value ?? skillData?.mod ?? 0;
-            baseFormula = `1d20+${skillMod}`;
+            let skillMod = skillData?.totalModifier ?? skillData?.value ?? skillData?.mod;
+
+            // PF2e/SF2e: Perception is NOT in system.skills — it lives in system.perception
+            if (skillMod === undefined && skillName === 'perception') {
+              const percData = (character as any).system?.perception ?? rollData.perception;
+              skillMod = percData?.totalModifier ?? percData?.value ?? percData?.mod;
+            }
+
+            baseFormula = `1d20+${skillMod ?? 0}`;
           } else {
             // dnd5e: 3-letter skill code, total field
             const skillCode = this.getSkillCode(rollTarget);
@@ -4821,7 +4850,7 @@ export class FoundryDataAccess {
         }
         
         const messageData: any = {
-          speaker: ChatMessage.getSpeaker({ actor: character }),
+          speaker: character ? ChatMessage.getSpeaker({ actor: character }) : { alias: rollLabel },
           flavor: `${rollLabel} ${isGmRoll ? '(GM Override)' : ''}`,
           ...(whisperTargets.length > 0 ? { whisper: whisperTargets } : {})
         };
@@ -5796,6 +5825,78 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Calculate straight-line distances in feet between tokens on the current scene.
+   */
+  async getTokenDistances(data: { tokenIds?: string[] }): Promise<any> {
+    this.validateFoundryState();
+
+    const scene = (game.scenes as any).current;
+    if (!scene) {
+      throw new Error('No active scene found');
+    }
+
+    // Collect the relevant token documents
+    let tokenDocs: any[] = Array.from(scene.tokens.contents || []);
+    if (data.tokenIds && data.tokenIds.length > 0) {
+      const idSet = new Set(data.tokenIds);
+      tokenDocs = tokenDocs.filter((t: any) => idSet.has(t.id));
+    } else {
+      // Default: all visible (non-hidden) tokens
+      tokenDocs = tokenDocs.filter((t: any) => !t.hidden);
+    }
+
+    if (tokenDocs.length < 2) {
+      return {
+        success: true,
+        distances: [],
+        message: tokenDocs.length === 0 ? 'No matching tokens found.' : 'Only one token found — no pairs to measure.',
+      };
+    }
+
+    // Get canvas tokens for measurePath (needs PlaceableObject center point, not TokenDocument)
+    const canvasTokens: any[] = (canvas as any).tokens?.placeables ?? [];
+    const canvasById = new Map(canvasTokens.map((t: any) => [t.id, t]));
+
+    const distances: Array<{ from: string; fromId: string; to: string; toId: string; feet: number }> = [];
+
+    for (let i = 0; i < tokenDocs.length; i++) {
+      for (let j = i + 1; j < tokenDocs.length; j++) {
+        const a = tokenDocs[i];
+        const b = tokenDocs[j];
+
+        // Use canvas token center points for measurement
+        const aCanvas = canvasById.get(a.id);
+        const bCanvas = canvasById.get(b.id);
+
+        let feet = 0;
+        if (aCanvas && bCanvas) {
+          // measurePath is the v12+ API (measureDistance is deprecated, removed in v14)
+          const path = (canvas as any).grid.measurePath([aCanvas.center, bCanvas.center], { gridSpaces: true });
+          feet = path.distance;
+        } else {
+          // Fallback: pixel distance converted via scene grid
+          const gridSize: number = scene.grid?.size ?? 100;
+          const gridDistance: number = scene.grid?.distance ?? 5;
+          const dx = (a.x + (a.width * gridSize) / 2) - (b.x + (b.width * gridSize) / 2);
+          const dy = (a.y + (a.height * gridSize) / 2) - (b.y + (b.height * gridSize) / 2);
+          const pixelDist = Math.sqrt(dx * dx + dy * dy);
+          feet = (pixelDist / gridSize) * gridDistance;
+        }
+
+        distances.push({
+          from: a.name ?? a.id,
+          fromId: a.id,
+          to: b.name ?? b.id,
+          toId: b.id,
+          feet: Math.round(feet),
+        });
+      }
+    }
+
+    return { success: true, distances };
+  }
+
+  /**
    * Extract a concise stat block from a token's actor (works for both linked and synthetic unlinked actors).
    */
   private extractTokenActorStats(actor: any): any {
@@ -6258,10 +6359,21 @@ export class FoundryDataAccess {
   /**
    * Play a playlist, optionally targeting a specific sound within it.
    */
-  async playPlaylist(options: { playlist: string; sound?: string }): Promise<any> {
+  async playPlaylist(options: { playlist: string; sound?: string; loop?: boolean; volume?: number; mode?: string }): Promise<any> {
     this.validateFoundryState();
 
     const pl = this.findPlaylist(options.playlist);
+
+    // Apply playlist-level mode change if requested (persistent)
+    if (options.mode !== undefined) {
+      const modeMap: Record<string, number> = {
+        sequential: (CONST as any).PLAYLIST_MODES?.SEQUENTIAL ?? 0,
+        shuffle: (CONST as any).PLAYLIST_MODES?.SHUFFLE ?? 1,
+        simultaneous: (CONST as any).PLAYLIST_MODES?.SIMULTANEOUS ?? 2,
+        soundboard: (CONST as any).PLAYLIST_MODES?.SOUNDBOARD ?? 3,
+      };
+      await pl.update({ mode: modeMap[options.mode] });
+    }
 
     if (options.sound) {
       const query = options.sound.toLowerCase();
@@ -6273,11 +6385,28 @@ export class FoundryDataAccess {
       if (!sound) {
         throw new Error(`Sound "${options.sound}" not found in playlist "${pl.name}".`);
       }
+
+      // Apply track-level changes if requested (persistent)
+      const updates: Record<string, any> = {};
+      if (options.loop !== undefined) updates.repeat = options.loop;
+      if (options.volume !== undefined) updates.volume = options.volume;
+      if (Object.keys(updates).length > 0) {
+        await sound.update(updates);
+      }
+
       await pl.playSound(sound);
-      return { success: true, message: `Playing "${sound.name}" from playlist "${pl.name}".`, playlist: pl.name, sound: sound.name };
+      return {
+        success: true,
+        message: `Playing "${sound.name}" from playlist "${pl.name}".`,
+        playlist: pl.name,
+        sound: sound.name,
+        ...(options.mode !== undefined ? { mode: options.mode } : {}),
+        ...(options.loop !== undefined ? { loop: options.loop } : {}),
+        ...(options.volume !== undefined ? { volume: options.volume } : {}),
+      };
     }
 
-    // Play the whole playlist
+    // Play the whole playlist (loop/volume not applied — would affect every track)
     await pl.playAll();
     return { success: true, message: `Playing playlist "${pl.name}".`, playlist: pl.name, mode: this.playlistModeName(pl.mode) };
   }

@@ -1685,6 +1685,12 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'get-token-distances':
+
+                  result = await tokenManipulationTools.handleGetTokenDistances(args);
+
+                  break;
+
                 // Map generation tools
 
                 case 'generate-map':
