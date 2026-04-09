@@ -148,6 +148,11 @@ export class QuestCreationTools {
             newPageName: {
               type: 'string',
               description: 'If provided (without pageId), creates a new page with this name instead of updating an existing one.'
+            },
+            replaceContent: {
+              type: 'boolean',
+              description: 'If true, REPLACES the entire page content instead of appending. Use this when you need to edit existing text (fix typos, rewrite sections, insert mid-page). Read the page first with list-journals to get the current HTML, modify it, then write back the full content. Default: false (append).',
+              default: false,
             }
           },
           required: ['journalId', 'newContent', 'updateType']
@@ -310,6 +315,7 @@ export class QuestCreationTools {
         updateType: z.enum(['progress', 'completion', 'failure', 'modification']),
         pageId: z.string().optional(),
         newPageName: z.string().optional(),
+        replaceContent: z.boolean().default(false),
       });
 
       const request = requestSchema.parse(args);
@@ -340,7 +346,30 @@ export class QuestCreationTools {
         };
       }
 
-      // Get current journal content (for the target page)
+      // Replace mode: write newContent directly as the full page content (no read-modify-append)
+      if (request.replaceContent) {
+        const result = await this.foundryClient.query('foundry-mcp-bridge.updateJournalContent', {
+          journalId: request.journalId,
+          content: request.newContent,
+          pageId: request.pageId,
+        });
+
+        if (!result || result.error || !result.success) {
+          throw new Error(result?.error || 'Failed to replace journal content');
+        }
+
+        return {
+          success: true,
+          updateType: request.updateType,
+          message: `Page content replaced in journal`,
+          pageId: result.pageId,
+          pageName: result.pageName,
+          verified: true,
+          replaceContent: true,
+        };
+      }
+
+      // Append mode (default): read current content, format update, append
       let currentContent: string;
       if (request.pageId) {
         const pageResult = await this.foundryClient.query('foundry-mcp-bridge.getJournalPageContent', {
