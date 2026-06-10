@@ -101,7 +101,11 @@
       "Bash(/Users/Adam/Projects/foundry-vtt-mcp/update-wrapper.sh:*)",
       "Bash(/Applications/FoundryMCPServer.app/Contents/Resources/ComfyUI/venv/bin/python /Applications/FoundryMCPServer.app/Contents/Resources/ComfyUI/main.py --help)",
       "Bash(./update-backend-now.sh:*)",
-      "Bash(hdiutil detach:*)"
+      "Bash(hdiutil detach:*)",
+      "Bash(mkdir -p docs)",
+      "Bash(mv ADDING_NEW_SYSTEMS.md docs/)",
+      "Bash(mv TOOL_INVENTORY.md docs/)",
+      "Bash(npm -v)"
     ],
     "deny": [],
     "ask": [],
