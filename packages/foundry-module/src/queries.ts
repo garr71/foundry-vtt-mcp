@@ -104,6 +104,9 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.upload-generated-map`] =
       this.handleUploadGeneratedMap.bind(this);
 
+    // Combat tracker queries
+    CONFIG.queries[`${modulePrefix}.getActiveCombat`] = this.handleGetActiveCombat.bind(this);
+
     // Item usage queries
     CONFIG.queries[`${modulePrefix}.useItem`] = this.handleUseItem.bind(this);
 
@@ -130,15 +133,20 @@ export class QueryHandlers {
       this.handleGetAvailableConditions.bind(this);
 
     // D&D 5e queries
-    CONFIG.queries[`${modulePrefix}.addSaveFeatureToActor`] = this.handleAddSaveFeatureToActor.bind(this);
+    CONFIG.queries[`${modulePrefix}.addSaveFeatureToActor`] =
+      this.handleAddSaveFeatureToActor.bind(this);
     CONFIG.queries[`${modulePrefix}.createNpcActor`] = this.handleCreateNpcActor.bind(this);
     CONFIG.queries[`${modulePrefix}.addAttackToActor`] = this.handleAddAttackToActor.bind(this);
     CONFIG.queries[`${modulePrefix}.addAuraToActor`] = this.handleAddAuraToActor.bind(this);
-    CONFIG.queries[`${modulePrefix}.addPassiveFeatureToActor`] = this.handleAddPassiveFeatureToActor.bind(this);
-    CONFIG.queries[`${modulePrefix}.addAttackWithSaveToActor`] = this.handleAddAttackWithSaveToActor.bind(this);
-    CONFIG.queries[`${modulePrefix}.setActorSpellcasting`] = this.handleSetActorSpellcasting.bind(this);
+    CONFIG.queries[`${modulePrefix}.addPassiveFeatureToActor`] =
+      this.handleAddPassiveFeatureToActor.bind(this);
+    CONFIG.queries[`${modulePrefix}.addAttackWithSaveToActor`] =
+      this.handleAddAttackWithSaveToActor.bind(this);
+    CONFIG.queries[`${modulePrefix}.setActorSpellcasting`] =
+      this.handleSetActorSpellcasting.bind(this);
     CONFIG.queries[`${modulePrefix}.addSpellsToActor`] = this.handleAddSpellsToActor.bind(this);
-    CONFIG.queries[`${modulePrefix}.addFeaturesFromCompendium`] = this.handleAddFeaturesFromCompendium.bind(this);
+    CONFIG.queries[`${modulePrefix}.addFeaturesFromCompendium`] =
+      this.handleAddFeaturesFromCompendium.bind(this);
   }
 
   /**
@@ -1405,6 +1413,18 @@ export class QueryHandlers {
   }
 
   /**
+   * Handle get active combat request
+   */
+  private async handleGetActiveCombat(): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getActiveCombat();
+  }
+
+  /**
    * Handle use item request (cast spell, use ability, consume item, etc.)
    */
   private async handleUseItem(data: {
@@ -1543,7 +1563,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.updateWorldItems({ updates: data.updates });
     } catch (error) {
-      throw new Error(`Failed to update world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to update world items: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1566,7 +1588,9 @@ export class QueryHandlers {
         ...(data.nameFilter !== undefined ? { nameFilter: data.nameFilter } : {}),
       });
     } catch (error) {
-      throw new Error(`Failed to list world items: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to list world items: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1627,7 +1651,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.addSaveFeatureToActor(data);
     } catch (error) {
-      throw new Error(`Failed to add save feature to actor: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to add save feature to actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1671,7 +1697,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.createNpcActor(data);
     } catch (error) {
-      throw new Error(`Failed to create NPC actor: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to create NPC actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1703,7 +1731,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.addAttackToActor(data);
     } catch (error) {
-      throw new Error(`Failed to add attack to actor: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to add attack to actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1738,7 +1768,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.addAuraToActor(data);
     } catch (error) {
-      throw new Error(`Failed to add aura to actor: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to add aura to actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1763,7 +1795,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.addPassiveFeatureToActor(data);
     } catch (error) {
-      throw new Error(`Failed to add passive feature to actor: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to add passive feature to actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1780,20 +1814,22 @@ export class QueryHandlers {
       this.dataAccess.validateFoundryState();
 
       if (!data.actorIdentifier) throw new Error('actorIdentifier is required');
-      if (!data.featureName)     throw new Error('featureName is required');
-      if (!data.attackType)      throw new Error('attackType is required');
+      if (!data.featureName) throw new Error('featureName is required');
+      if (!data.attackType) throw new Error('attackType is required');
       if (!Array.isArray(data.damageParts) || data.damageParts.length === 0) {
         throw new Error('damageParts is required and must contain at least one element');
       }
       if (!data.saveAbility) throw new Error('saveAbility is required');
-      if (!data.saveDC)      throw new Error('saveDC is required');
+      if (!data.saveDC) throw new Error('saveDC is required');
       if (!Array.isArray(data.saveDamageParts) || data.saveDamageParts.length === 0) {
         throw new Error('saveDamageParts is required and must contain at least one element');
       }
 
       return await this.dataAccess.addAttackWithSaveToActor(data);
     } catch (error) {
-      throw new Error(`Failed to add attack+save to actor: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to add attack+save to actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1805,7 +1841,11 @@ export class QueryHandlers {
       if (!data.spellcastingClass) {
         throw new Error('spellcastingClass is required');
       }
-      if (typeof data.spellcastingLevel !== 'number' || data.spellcastingLevel < 1 || data.spellcastingLevel > 20) {
+      if (
+        typeof data.spellcastingLevel !== 'number' ||
+        data.spellcastingLevel < 1 ||
+        data.spellcastingLevel > 20
+      ) {
         throw new Error('spellcastingLevel must be a number between 1 and 20');
       }
       if (!data.effectiveAbility) {
@@ -1814,7 +1854,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.setActorSpellcasting(data);
     } catch (error) {
-      throw new Error(`Failed to set actor spellcasting: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to set actor spellcasting: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1832,7 +1874,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.addSpellsToActor(data);
     } catch (error) {
-      throw new Error(`Failed to add spells to actor: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to add spells to actor: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
 
@@ -1850,8 +1894,9 @@ export class QueryHandlers {
 
       return await this.dataAccess.addFeaturesFromCompendium(data);
     } catch (error) {
-      throw new Error(`Failed to add features from compendium: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Failed to add features from compendium: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
   }
-
 }

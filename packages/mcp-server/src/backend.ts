@@ -36,6 +36,8 @@ import { MapGenerationTools } from './tools/map-generation.js';
 
 import { TokenManipulationTools } from './tools/token-manipulation.js';
 
+import { CombatTools } from './tools/combat.js';
+
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
 
 import { DnD5eAddFeatureTool } from './tools/dnd5e/add-feature.js';
@@ -190,15 +192,16 @@ function acquireLock(): boolean {
             if (evaluateLockFile(lockPid, LOCK_FILE) === 'orphaned') {
               console.error(
                 `Removing orphaned backend lock for PID ${lockPid} ` +
-                `(process is not node.exe or lock file is stale)`,
+                  `(process is not node.exe or lock file is stale)`
               );
-              try { fs.unlinkSync(LOCK_FILE); } catch {}
+              try {
+                fs.unlinkSync(LOCK_FILE);
+              } catch {}
               lockFd = fs.openSync(LOCK_FILE, 'wx');
             } else {
               // Backend is genuinely running — exit gracefully
               return false;
             }
-
           } catch {
             console.error(`Removing stale backend lock for PID ${lockPid}`);
 
@@ -1189,9 +1192,12 @@ async function startBackend(): Promise<void> {
 
   const dsa5CharacterCreator = new DSA5CharacterCreator({ foundryClient, logger });
 
-  const dnd5eAddFeatureTool              = new DnD5eAddFeatureTool({ foundryClient, logger });
-  const dnd5eNpcTools                    = new DnD5eNpcTools({ foundryClient, logger });
-  const dnd5eFeaturesFromCompendiumTools = new DnD5eFeaturesFromCompendiumTools({ foundryClient, logger });
+  const dnd5eAddFeatureTool = new DnD5eAddFeatureTool({ foundryClient, logger });
+  const dnd5eNpcTools = new DnD5eNpcTools({ foundryClient, logger });
+  const dnd5eFeaturesFromCompendiumTools = new DnD5eFeaturesFromCompendiumTools({
+    foundryClient,
+    logger,
+  });
 
   const questCreationTools = new QuestCreationTools({ foundryClient, logger });
 
@@ -1202,6 +1208,8 @@ async function startBackend(): Promise<void> {
   const ownershipTools = new OwnershipTools({ foundryClient, logger });
 
   const tokenManipulationTools = new TokenManipulationTools({ foundryClient, logger });
+
+  const combatTools = new CombatTools({ foundryClient, logger });
 
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
@@ -1424,6 +1432,8 @@ async function startBackend(): Promise<void> {
 
     ...tokenManipulationTools.getToolDefinitions(),
 
+    ...combatTools.getToolDefinitions(),
+
     ...mapGenerationTools.getToolDefinitions(),
   ];
 
@@ -1583,20 +1593,18 @@ async function startBackend(): Promise<void> {
                 // D&D 5e tools
 
                 case 'dnd5e-add-feature':
-
                   result = await dnd5eAddFeatureTool.handleAddFeature(args);
 
                   break;
 
                 case 'dnd5e-create-npc':
-
                   result = await dnd5eNpcTools.handleCreateNpc(args);
 
                   break;
 
                 case 'dnd5e-add-features-from-compendium':
-
-                  result = await dnd5eFeaturesFromCompendiumTools.handleAddFeaturesFromCompendium(args);
+                  result =
+                    await dnd5eFeaturesFromCompendiumTools.handleAddFeaturesFromCompendium(args);
 
                   break;
 
@@ -1714,6 +1722,12 @@ async function startBackend(): Promise<void> {
 
                 case 'switch-scene':
                   result = await mapGenerationTools.switchScene(args);
+
+                  break;
+
+                // Combat tools
+                case 'get-combat-tracker':
+                  result = await combatTools.handleGetCombatTracker(args);
 
                   break;
 

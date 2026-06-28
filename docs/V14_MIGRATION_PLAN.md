@@ -61,17 +61,17 @@ Module guard for optional-module tools: `game.modules.get('<id>')?.active` (goes
 
 Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 
-| Phase | Tool / Goal                          | Files      | Risk         | Status                                         |
-| ----- | ------------------------------------ | ---------- | ------------ | ---------------------------------------------- |
-| 0     | Foundation & stock baseline          | —          | Low          | ✅ verified on v14 (scene read + dice-roll OK) |
-| 1     | Combat tracker read                  | new        | Low-Med      | ⬜                                             |
-| 2     | Chat read + send-to-chat             | new        | Low-Med      | ⬜                                             |
-| 3     | Token distances + hidden tokens      | **shared** | **Med-High** | ⬜                                             |
-| 4     | Playlist control                     | new        | Low          | ⬜                                             |
-| 5     | Journal / handout display            | new        | Low          | ⬜                                             |
-| 6     | Simple Quest integration             | **shared** | Med          | ⬜                                             |
-| 7     | Promote `v14-port` → `master` + docs | —          | Low          | ⬜                                             |
-| —     | sf2e adapter + sf2e index            | sf2e       | —            | ⏭️ deferred                                    |
+| Phase | Tool / Goal                          | Files      | Risk         | Status                                              |
+| ----- | ------------------------------------ | ---------- | ------------ | --------------------------------------------------- |
+| 0     | Foundation & stock baseline          | —          | Low          | ✅ verified on v14 (scene read + dice-roll OK)      |
+| 1     | Combat tracker read                  | new        | Low-Med      | ✅ verified on v14 (round/turn/init/disposition OK) |
+| 2     | Chat read + send-to-chat             | new        | Low-Med      | ⬜                                                  |
+| 3     | Token distances + hidden tokens      | **shared** | **Med-High** | ⬜                                                  |
+| 4     | Playlist control                     | new        | Low          | ⬜                                                  |
+| 5     | Journal / handout display            | new        | Low          | ⬜                                                  |
+| 6     | Simple Quest integration             | **shared** | Med          | ⬜                                                  |
+| 7     | Promote `v14-port` → `master` + docs | —          | Low          | ⬜                                                  |
+| —     | sf2e adapter + sf2e index            | sf2e       | —            | ⏭️ deferred                                         |
 
 Each phase ends at a working, testable state. **Me** = code + build + deploy. **You** = test in Foundry, report.
 
@@ -94,10 +94,11 @@ Each phase ends at a working, testable state. **Me** = code + build + deploy. **
 
 **Goal:** Highest every-session value + validates the 4-file port pattern on v14.
 
-- [ ] Port `combat.ts` across the 4 files; prettier + lint + tsc + build + deploy
-- [ ] **You:** read initiative order / current turn / round in a combat
-- **Gate:** Combat state returns correctly in v14.
+- [x] Port `combat.ts` across the 4 files; build (server + module) clean; deployed (server bundle + module dist)
+- [x] **You:** read initiative order / current turn / round in a combat — ✅ verified on v14 (Round 1, current turn, init sort highest-first, defeated/hidden/disposition all correct)
+- **Gate:** ✅ MET. Combat state returns correctly in v14.
 - **Note:** If this goes smoothly, the clean-file phases (2, 4, 5) are mechanical repeats.
+- **Minor follow-up (batch later):** `getActiveCombat` returns `scene: null` when the combat isn't bound to a scene. Consider `game.scenes.active?.name` fallback. Cosmetic; no tool depends on it.
 
 ### Phase 2 — Chat / roll reading + send-to-chat 💬
 
