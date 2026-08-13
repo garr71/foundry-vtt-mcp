@@ -45,6 +45,8 @@ import { ChatTools } from './tools/chat.js';
 
 import { JournalTools } from './tools/journal.js';
 
+import { PlaylistTools } from './tools/playlist.js';
+
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
 
 import { DnD5eAddFeatureTool } from './tools/dnd5e/add-feature.js';
@@ -1228,6 +1230,8 @@ async function startBackend(): Promise<void> {
 
   const journalTools = new JournalTools({ foundryClient, logger });
 
+  const playlistTools = new PlaylistTools({ foundryClient, logger });
+
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
   let mapGenerationComfyUIClient: any = null;
@@ -1459,6 +1463,8 @@ async function startBackend(): Promise<void> {
     ...chatTools.getToolDefinitions(),
 
     ...journalTools.getToolDefinitions(),
+
+    ...playlistTools.getToolDefinitions(),
 
     ...mapGenerationTools.getToolDefinitions(),
   ];
@@ -1788,6 +1794,22 @@ async function startBackend(): Promise<void> {
 
                 case 'show-journal-to-players':
                   result = await journalTools.handleShowJournalToPlayers(args);
+
+                  break;
+
+                // Playlist tools
+                case 'list-playlists':
+                  result = await playlistTools.handleListPlaylists(args);
+
+                  break;
+
+                case 'play-playlist':
+                  result = await playlistTools.handlePlayPlaylist(args);
+
+                  break;
+
+                case 'stop-playlist':
+                  result = await playlistTools.handleStopPlaylist(args);
 
                   break;
 

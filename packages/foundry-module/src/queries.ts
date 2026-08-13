@@ -111,6 +111,11 @@ export class QueryHandlers {
     // Combat tracker queries
     CONFIG.queries[`${modulePrefix}.getActiveCombat`] = this.handleGetActiveCombat.bind(this);
 
+    // Playlist queries
+    CONFIG.queries[`${modulePrefix}.getPlaylists`] = this.handleGetPlaylists.bind(this);
+    CONFIG.queries[`${modulePrefix}.playPlaylist`] = this.handlePlayPlaylist.bind(this);
+    CONFIG.queries[`${modulePrefix}.stopPlaylist`] = this.handleStopPlaylist.bind(this);
+
     // Chat reading queries
     CONFIG.queries[`${modulePrefix}.getRecentChat`] = this.handleGetRecentChat.bind(this);
 
@@ -1497,6 +1502,49 @@ export class QueryHandlers {
     }
     this.dataAccess.validateFoundryState();
     return await this.dataAccess.getActiveCombat();
+  }
+
+  /**
+   * Handle list playlists request
+   */
+  private async handleGetPlaylists(): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getPlaylists();
+  }
+
+  /**
+   * Handle play playlist request
+   */
+  private async handlePlayPlaylist(data: {
+    playlist: string;
+    sound?: string;
+    loop?: boolean;
+    volume?: number;
+    mode?: string;
+  }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    if (!data.playlist) throw new Error('playlist is required');
+    return await this.dataAccess.playPlaylist(data);
+  }
+
+  /**
+   * Handle stop playlist request
+   */
+  private async handleStopPlaylist(data: { playlist?: string }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.stopPlaylist(data);
   }
 
   /**

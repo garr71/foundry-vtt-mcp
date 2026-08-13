@@ -10014,6 +10014,176 @@ export class FoundryDataAccess {
 
   // ─── mgt2e ──────────────────────────────────────────────────────────────────
 
+  // ===== PLAYLIST MANAGEMENT =====
+
+  /**
+   * List all playlists with their current playback state and sounds.
+   */
+  async getPlaylists(): Promise<any> {
+    this.validateFoundryState();
+
+    const playlists = (game.playlists?.contents || []).map((pl: any) => {
+      const sounds = (pl.sounds?.contents || []).map((s: any) => ({
+        id: s.id,
+        name: s.name,
+        playing: s.playing ?? false,
+        volume: s.volume ?? 0.5,
+        repeat: s.repeat ?? false,
+        path: s.path ?? null,
+      }));
+
+      return {
+        id: pl.id,
+        name: pl.name,
+        playing: pl.playing ?? false,
+        mode: this.playlistModeName(pl.mode),
+        sounds,
+        totalSounds: sounds.length,
+        playingSounds: sounds.filter((s: any) => s.playing).length,
+      };
+    });
+
+    return {
+      playlists,
+      total: playlists.length,
+      currentlyPlaying: playlists.filter((pl: any) => pl.playing).length,
+    };
+  }
+
+  /**
+   * Play a playlist, optionally targeting a specific sound within it.
+   */
+  async playPlaylist(options: {
+    playlist: string;
+    sound?: string;
+    loop?: boolean;
+    volume?: number;
+    mode?: string;
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const pl = this.findPlaylist(options.playlist);
+
+    // Apply playlist-level mode change if requested (persistent).
+    // NOTE: Foundry has no SOUNDBOARD mode constant — "Soundboard Only" in the UI is
+    // PLAYLIST_MODES.DISABLED (-1). The `mode` field validates against
+    // Object.values(CONST.PLAYLIST_MODES), so an out-of-range value throws.
+    if (options.mode !== undefined) {
+      const modeMap: Record<string, number> = {
+        sequential: (CONST as any).PLAYLIST_MODES?.SEQUENTIAL ?? 0,
+        shuffle: (CONST as any).PLAYLIST_MODES?.SHUFFLE ?? 1,
+        simultaneous: (CONST as any).PLAYLIST_MODES?.SIMULTANEOUS ?? 2,
+        soundboard: (CONST as any).PLAYLIST_MODES?.DISABLED ?? -1,
+      };
+      await pl.update({ mode: modeMap[options.mode] });
+    }
+
+    if (options.sound) {
+      const query = options.sound.toLowerCase();
+      const sound = (pl.sounds?.contents || []).find(
+        (s: any) =>
+          s.id === options.sound ||
+          (s.name ?? '').toLowerCase() === query ||
+          (s.name ?? '').toLowerCase().includes(query)
+      );
+      if (!sound) {
+        throw new Error(`Sound "${options.sound}" not found in playlist "${pl.name}".`);
+      }
+
+      // Apply track-level changes if requested (persistent)
+      const updates: Record<string, any> = {};
+      if (options.loop !== undefined) updates.repeat = options.loop;
+      if (options.volume !== undefined) updates.volume = options.volume;
+      if (Object.keys(updates).length > 0) {
+        await sound.update(updates);
+      }
+
+      await pl.playSound(sound);
+      return {
+        success: true,
+        message: `Playing "${sound.name}" from playlist "${pl.name}".`,
+        playlist: pl.name,
+        sound: sound.name,
+        ...(options.mode !== undefined ? { mode: options.mode } : {}),
+        ...(options.loop !== undefined ? { loop: options.loop } : {}),
+        ...(options.volume !== undefined ? { volume: options.volume } : {}),
+      };
+    }
+
+    // Play the whole playlist (loop/volume not applied — would affect every track).
+    // Foundry's playAll() deliberately does nothing on a "Soundboard Only" playlist:
+    // it sets playing: false, since that mode means "never plays on its own".
+    await pl.playAll();
+    const resolvedMode = this.playlistModeName(pl.mode);
+    return {
+      success: true,
+      message:
+        resolvedMode === 'soundboard'
+          ? `Playlist "${pl.name}" is in Soundboard Only mode, so it does not play as a whole. Name a specific sound instead.`
+          : `Playing playlist "${pl.name}".`,
+      playlist: pl.name,
+      mode: resolvedMode,
+      ...(resolvedMode === 'soundboard' ? { playing: false } : {}),
+    };
+  }
+
+  /**
+   * Stop a playlist (or all playlists if none specified).
+   */
+  async stopPlaylist(options: { playlist?: string }): Promise<any> {
+    this.validateFoundryState();
+
+    if (!options.playlist) {
+      // Stop everything
+      const playing = (game.playlists?.contents || []).filter((pl: any) => pl.playing);
+      for (const pl of playing) {
+        await pl.stopAll();
+      }
+      return {
+        success: true,
+        message: `Stopped all playlists (${playing.length} were playing).`,
+        stopped: playing.length,
+      };
+    }
+
+    const pl = this.findPlaylist(options.playlist);
+    await pl.stopAll();
+    return { success: true, message: `Stopped playlist "${pl.name}".`, playlist: pl.name };
+  }
+
+  private findPlaylist(query: string): any {
+    const lower = query.toLowerCase();
+    const pl = (game.playlists?.contents || []).find(
+      (p: any) =>
+        p.id === query ||
+        (p.name ?? '').toLowerCase() === lower ||
+        (p.name ?? '').toLowerCase().includes(lower)
+    );
+    if (!pl) {
+      throw new Error(`Playlist "${query}" not found.`);
+    }
+    return pl;
+  }
+
+  /**
+   * Map a numeric PLAYLIST_MODES value to the tool-facing name.
+   * -1 is Foundry's DISABLED, shown in its UI as "Soundboard Only".
+   */
+  private playlistModeName(mode: number): string {
+    switch (mode) {
+      case -1:
+        return 'soundboard';
+      case 0:
+        return 'sequential';
+      case 1:
+        return 'shuffle';
+      case 2:
+        return 'simultaneous';
+      default:
+        return 'unknown';
+    }
+  }
+
   // ===== CHAT / ROLL READING =====
 
   /**

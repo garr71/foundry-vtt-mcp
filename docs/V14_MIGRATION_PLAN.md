@@ -248,7 +248,7 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | 1     | Combat tracker read (re-port)                         | new           | Low          | ✅ **done**  |
 | 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ✅ **done**  |
 | 2     | Chat read/send + journal display                      | new ×2        | Low          | ✅ **done**  |
-| 3     | Playlist control                                      | new           | Low          | ⬜ **NEXT**  |
+| 3     | Playlist control                                      | new           | Low          | 🔄 **gate**  |
 | 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜           |
 | 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ⬜           |
 | 6     | Promote → `master` + docs                             | —             | Low          | ⬜           |
@@ -932,11 +932,68 @@ in the socket callback, so the GM's own client renders it too.
 - **A backend is already running** (started by hand, PID logged at deploy time). Per the Phase R
   race note, start Claude Desktop _while it is up_ so neither wrapper needs to spawn one.
 
-### Phase 3 — Playlist control 🎵 ⬜
+### Phase 3 — Playlist control 🎵 🔄 (deployed 2026-08-13, awaiting gate)
 
-- [ ] Port `playlist.ts` (`list-playlists`, `play-playlist`, `stop-playlist`) with loop/volume/mode
+- [x] Port `playlist.ts` (`list-playlists`, `play-playlist`, `stop-playlist`) with loop/volume/mode
+- [x] Built, typechecked, formatted, bundled, deployed (both packages, matched pair).
+      **240 insertions, 0 deletions.** Control-port probe: **50 tools** = 43 stock + 7 ported.
 - [ ] **You:** play/stop a playlist; test loop and volume
 - **Gate:** audio control works from Claude.
+
+#### ⚠️ Three defects in the port source — one would have thrown, two were silent
+
+The v14 API check paid off again. `PLAYLIST_MODES` has **no `SOUNDBOARD`**:
+
+```js
+DISABLED: -1,  SEQUENTIAL: 0,  SHUFFLE: 1,  SIMULTANEOUS: 2      // common/constants.mjs L784
+"PLAYLIST.ModeDisabled": "Soundboard Only"                        // public/lang/en.json L1938
+```
+
+Foundry's "Soundboard Only" **is** `DISABLED (-1)`. `master` maps it to `3`.
+
+| #   | `master` wrote                                     | Reality                                                                   | Severity                       |
+| --- | -------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------ |
+| 1   | `soundboard: PLAYLIST_MODES?.SOUNDBOARD ?? 3`      | key does not exist → falls to `3`, and `mode` validates against `choices` | **throws** on v14              |
+| 2   | `playlistModeName`: `case 3 → 'soundboard'`, no -1 | a real soundboard playlist has mode `-1` → falls to `default`             | **silent** — reports `unknown` |
+| 3   | volume doc: "cubic … use `(p/100)^(1/3)`"          | the curve exponent is **1.5** (`AudioHelper.inputToVolume`, `order=1.5`)  | **silent** — wrong values      |
+
+Row 1 fails loudly, which is the good case. Row 2 is the quiet one: `list-playlists` would have
+labelled every soundboard playlist `unknown` forever, and nothing would have looked wrong.
+
+Row 3 is worth its own note because the description **contradicted itself** and shipped anyway:
+it correctly stated "0.5 displays as ~63%" while prescribing `(p/100)^(1/3)`, which yields 0.79 for
+that same case. With `volumeToInput(v) = v^(1/1.5)`, internal 0.5 → 63% ✓, and the correct inverse
+is `(P/100)^1.5`. Whoever wrote it measured one value empirically and then guessed the formula.
+
+**Ported with rows 1-3 corrected**, on the Phase 2 precedent: a constant that does not exist is not
+a re-derive to fix. `getSkillCode`-style upstream defaults were left alone.
+
+#### Free behaviour worth knowing: `playAll()` no-ops on a soundboard playlist
+
+Not a defect — `Playlist#playAll()` explicitly sets `playing: false` for `PLAYLIST_MODES.DISABLED`,
+because that mode means "never plays on its own". A bare `play-playlist` on such a playlist would
+have returned a confident `Playing playlist "X".` and produced silence. The port now detects the
+mode and returns an explanatory message plus `playing: false` instead.
+
+#### Carried, not fixed: `list-playlists` reports raw volume, not UI volume
+
+`formatPlaylistsResponse` does `Math.round(s.volume * 100) + '%'` on the **internal** value, so a
+track at internal 0.5 reads `"50%"` here while Foundry's own UI shows **63%**. Faithful to `master`,
+and now inconsistent with `play-playlist`'s corrected description in the same tool file.
+
+Left alone deliberately, on the Phase 2 rule: **deviate where v14 forces it, flag where the port is
+merely imperfect.** Rows 1-3 were forced; this is a presentation choice with a real trade-off
+(matching the UI would make the read and write scales differ). Filed to 7d.
+
+#### Notes for the gate
+
+- All three tools are **GM-gated** in `queries.ts`.
+- `loop` and `volume` apply **only** when a specific `sound` is named — by design, since they would
+  otherwise rewrite every track in the playlist. A bare `play-playlist` silently ignores them.
+- `loop`, `volume` and `mode` are **persistent document updates**, not playback-session settings.
+  They survive stopping the playlist. Set them on a track you do not mind changing.
+- Expect the reported volume percentage to disagree with Foundry's slider. See above — that is the
+  known carried item, not a Phase 3 failure.
 
 ### Phase 4 — Token distances + hidden tokens 📐 ⬜
 
@@ -1056,6 +1113,10 @@ strategy-decision-4 reason:
       message with no speaker indistinguishable from one spoken by its author. Faithful to `master`,
       but it defeated the Phase 2 gate fixture. Emit the speaker as nullable and let the caller
       decide, rather than silently substituting.
+- [ ] **`list-playlists` reports raw volume, not UI volume** — `Math.round(s.volume * 100)` on the
+      internal value, so a track at 0.5 reads `"50%"` while Foundry's slider shows 63%. Decide
+      whether to report the UI percentage (matches what you see, but then read and write use
+      different scales) or to report both. Found in Phase 3.
 
 ---
 
