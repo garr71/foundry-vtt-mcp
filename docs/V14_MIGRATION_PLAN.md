@@ -702,37 +702,75 @@ sites and restore `?? 0` inline.
 - **Gate:** rolls readable; messages post with correct speaker + portrait; correct journal page
   displays to players; quest visibility and checklist behave as on old `master`.
 
-#### ⚠️ Simple Quest 3.0.20 → 5.1.4 breaking change (verified 2026-08-12)
+#### ⚠️ Simple Quest 3.0.20 → 5.1.4 — **rewritten 2026-08-12, the earlier note was wrong**
 
-`set-quest-visibility` and `set-quest-checklist-item` need the **Simple Quest** module active
-(guard already present at `data-access.ts` ~L3533: `game.modules.get('simple-quest')?.active`).
+Read against the **installed** module at
+`D:\FoundryData-Paizo\Data\modules\simple-quest` (manifest confirms **5.1.4**, compat
+min=14 verified=14), not from release notes.
 
-The v13 world runs Simple Quest **3.0.20**; the v14 world runs **5.1.4**. Our integration was
-reverse-engineered against 3.0.20.
+> **The previous revision of this section said "what survived: the flag shape" and scoped the
+> work as a key-derivation fix. Both halves of that were wrong.** The flag shape did not survive,
+> and the back-compat map does not do what the note claimed. Corrected below. This is the same
+> failure mode as revision 4's row 4 — a plan entry documenting one side of a two-sided change —
+> and it was caught the same way, by reading the code instead of the note.
 
-**What survived:** the flag shape. SQ 5.1.4 still reads `page.getFlag('simple-quest', 'secret')`
-and `page.getFlag('simple-quest', 'checkboxes')` as keyed objects, and `loreFolderName` is still
-a module setting. The overall approach is sound.
-
-**What broke:** the checklist/objective **key derivation**.
+**What actually changed: state moved out of flags entirely.** SQ 5.x introduces a custom journal
+page subtype `simple-quest.quest` with a real DataModel (`scripts/journal/JournalPageQuest.js`,
+`objectiveState` / `objectiveSecrets` as `ObjectField`s). Runtime reads
+`scripts/journal/JournalPageHelpers.js` L407-411:
 
 ```js
-// ours (3.x era), data-access.ts ~L3619
-key = text.replace(/\s/g, '').replace(/\./g, '').substring(0, 50);
-
-// SQ 5.1.4
-key = li.textContent.trim().slice(0, 50).slugify({ strict: true });
+const state = this.document.system.objectiveState ?? {};
+const secrets = this.document.system.objectiveSecrets ?? {};
+const key = li.textContent.trim().slice(0, 50).slugify({ strict: true }); // _getObjectiveKey
 ```
 
-SQ 5.1.4 ships a back-compat map (`listItemSlugMap[oldKey] = newKey`) that remaps legacy keys on
-render, so our old-format writes may appear to work. Do not rely on it: it exists for migration
-and can be dropped in any 5.x patch.
+`checkboxes` and `secret` flags now have **exactly one reader left in the codebase**:
+`scripts/migration.js`, the one-time upgrade that rewrites `text` pages into
+`simple-quest.quest`. There are zero runtime readers.
 
-- [ ] Update key derivation in `setQuestChecklistItem` **and** `setQuestVisibility` (the
-      `secret.${slug}` path) to `text.trim().slice(0,50).slugify({strict:true})`
-- [ ] **Failure mode is silent.** A wrong key still writes a flag successfully and returns OK;
-      SQ simply ignores it. Test by confirming the checkbox/secret marker **visibly changes in the
-      Simple Quest UI**, never by trusting the tool's success response.
+**The back-compat map is not a back-compat map.** `listItemSlugMap[oldKey] = newKey` lives
+_inside_ `migrateQuestJournal`, not the render path. It translates flags that already existed at
+migration time and never runs again. The old note said it "remaps legacy keys on render, so our
+old-format writes may appear to work" — it does not, so they will not. Our writes land on flags
+nobody reads.
+
+That is **better for testing** (total, visible failure rather than a subtle one) and **worse for
+scope** (a storage-layer change, not a string fix).
+
+**Compatibility of each thing we port**
+
+| Our write                             | Goes to                                  | SQ 5.1.4 reads                                         | Verdict                              |
+| ------------------------------------- | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------ |
+| `setQuestChecklistItem` `completed`   | `flags.simple-quest.checkboxes.<oldKey>` | `system.objectiveState[slug]`                          | ❌ location **and** key              |
+| `setQuestChecklistItem` `revealed`    | `flags.simple-quest.secret.<oldKey>`     | `system.objectiveSecrets[slug]`                        | ❌ location **and** key              |
+| `setQuestVisibility` section          | `flags.simple-quest.secret.<slug>`       | `system.objectiveSecrets[slug]`                        | ⚠️ key already right, location wrong |
+| `setQuestVisibility` page (quest tab) | `flags.simple-quest.hidden`              | `getFlag(MODULE_ID,'hidden')` (`notifications.js` L46) | ✅ survives                          |
+| `setQuestVisibility` page (lore tab)  | Foundry `ownership`                      | Foundry core                                           | ✅ survives                          |
+| `loreFolderName` lookup               | `game.settings.get('simple-quest', …)`   | still a setting (`settings.js` L51)                    | ✅ survives                          |
+| `stateMap` 0/1/2                      | —                                        | `CHECKBOX_STATE` 0/1/2 unchanged                       | ✅ survives                          |
+
+Note the asymmetry: the **section** path already slugifies correctly and only needs its storage
+moved; the **checklist** path needs both. Half of `setQuestVisibility` needs no change at all.
+
+**Required work for Phase 2**
+
+- [ ] Key derivation → `text.trim().slice(0, 50).slugify({ strict: true })`. Order matters:
+      **slice before slugify**, matching `_getObjectiveKey`.
+- [ ] Storage → `page.system.objectiveState` / `system.objectiveSecrets`. Follow SQ's own write
+      pattern (`JournalPageHelpers.js` L448-450): read current, `foundry.utils.mergeObject`, then
+      `page.update({ 'system.objectiveState': merged })`. Do not assume a dotted-path update into
+      an `ObjectField` behaves.
+- [ ] **Guard on page type.** Only `page.type === 'simple-quest.quest'` has `system.objectiveState`.
+      An unmigrated `text` page must fail loudly, not write into nothing.
+- [ ] Leave the `hidden` flag and the ownership path alone — both still correct.
+- [ ] **Failure mode is silent from the tool's side.** A write to the wrong place still succeeds
+      and returns OK. Verify by watching the checkbox/secret marker change **in the Simple Quest
+      UI**, never by trusting the response.
+
+**Carries into Phase 5:** `completed` also left the flags — quest status is now `system.status`
+(`"0"` open / `"1"` complete / `"2"` failed). Check `update-quest-journal` against that before
+porting `replaceContent`.
 
 ### Phase 3 — Playlist control 🎵 ⬜
 
