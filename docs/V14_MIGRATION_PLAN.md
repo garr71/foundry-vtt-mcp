@@ -191,17 +191,17 @@ in that file is ours.
 
 Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 
-| Phase | Goal                                                  | Files         | Risk         | Status               |
-| ----- | ----------------------------------------------------- | ------------- | ------------ | -------------------- |
-| **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done**          |
-| 1     | Combat tracker read (re-port)                         | new           | Low          | 🔄 **awaiting gate** |
-| 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ⬜                   |
-| 2     | Chat read/send + journal + quest visibility           | new ×2        | Low-Med      | ⬜                   |
-| 3     | Playlist control                                      | new           | Low          | ⬜                   |
-| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜                   |
-| 5     | Quest journal `replaceContent`                        | **shared**    | Med          | ⬜                   |
-| 6     | Promote → `master` + docs                             | —             | Low          | ⬜                   |
-| —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred          |
+| Phase | Goal                                                  | Files         | Risk         | Status      |
+| ----- | ----------------------------------------------------- | ------------- | ------------ | ----------- |
+| **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done** |
+| 1     | Combat tracker read (re-port)                         | new           | Low          | ✅ **done** |
+| 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ⬜ **NEXT** |
+| 2     | Chat read/send + journal + quest visibility           | new ×2        | Low-Med      | ⬜          |
+| 3     | Playlist control                                      | new           | Low          | ⬜          |
+| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜          |
+| 5     | Quest journal `replaceContent`                        | **shared**    | Med          | ⬜          |
+| 6     | Promote → `master` + docs                             | —             | Low          | ⬜          |
+| —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred |
 
 Each phase ends at a working, testable state.
 **Me** = code + build + deploy. **You** = test in Foundry, report.
@@ -438,7 +438,7 @@ against the old fork build.
 - Verified separately: the backend survives both graceful and abrupt (RST) control-client
   disconnects, so probing it is safe.
 
-### Phase 1 — Combat tracker read 🎯 🔄 (code done, deployed, awaiting gate)
+### Phase 1 — Combat tracker read 🎯 ✅ DONE (gate passed 2026-08-12)
 
 **Goal:** Re-land the one tool already proven on v14, and re-validate the 4-file pattern on v0.8.3.
 
@@ -450,9 +450,59 @@ against the old fork build.
       bound to a scene. Add a `game.scenes.active?.name` fallback.
 - [x] Built, typechecked, bundled, deployed (both packages, matched pair). Control-port probe:
       **44 tools** = 43 stock + `get-combat-tracker`.
-- [ ] **You:** read initiative order / current turn / round in a combat
+- [x] **You:** read initiative order / current turn / round in a combat
 - **Gate:** round, current turn, init sorted highest-first, defeated/hidden/disposition all correct
   (this exact behaviour was confirmed on v0.8.2, so any difference is a v0.8.3 regression worth chasing).
+
+**Phase 1 gate results (2026-08-12)** — live pf2e combat on scene "Landing", 4 combatants
+(2× "Chelaxian Recruit", Ezren, Amiri), round 1.
+
+| Check                  | Result                                                            |
+| ---------------------- | ----------------------------------------------------------------- |
+| Round                  | ✅ 1                                                              |
+| Current turn           | ✅ Chelaxian Recruit @ 23, matches `combat.combatant`             |
+| Initiative sorted desc | ✅ 23, 20, 19, 19                                                 |
+| `defeated`             | ✅ exactly one flagged                                            |
+| `hidden`               | ✅ flipped `false`→`true` on the hidden token, nothing else moved |
+| `disposition`          | ✅ hostile/friendly correct per token                             |
+| Summary counts         | ✅ 4 / 1 / 3 / 0, internally consistent                           |
+| Tool freshness         | ✅ control-port probe: 44 tools                                   |
+
+**Gate verdict: PASS.** No v0.8.3 regression against the v0.8.2 behaviour.
+
+`hidden` was verified by a **second call with one token toggled between them** — it was the only
+field that changed across two otherwise identical responses. That isolation is worth repeating:
+a single call showing `hidden: true` proves far less than a diff of two calls.
+
+#### ⚠️ Carried limitation: tied initiative is ordered by collection order, not tracker order
+
+Surfaced by the gate test (Chelaxian Recruit and Amiri both at 19). **Not a Phase 1 regression** —
+v0.8.2 had it too and passed its gate, because that test happened to have no tie.
+
+`getActiveCombat` reads `combat.combatants.contents` (the raw collection) and sorts it itself.
+Foundry's authoritative order is **`combat.turns`**, built by `Combat#setupTurns`, which applies a
+tie-break beyond initiative and which game systems may override. JS `sort` is stable, so on a tie
+our order falls back to collection order — roughly document creation order.
+
+- **Not affected:** `isCurrentTurn`, which comes from `combat.combatant.id` and is authoritative.
+  "Whose turn is it" is always right.
+- **Affected:** `position` and neighbouring order on ties — i.e. answering _"who goes next"_.
+  On pf2e, where ties are common and the tie-break is a real rule, that matters.
+- **Fix** (contained, one line plus skipping the manual sort):
+
+  ```ts
+  const source = combat.turns?.length ? combat.turns : combat.combatants?.contents || [];
+  ```
+
+- **Scheduled into Phase 1.5**, which already rebuilds and redeploys both packages — the fix rides
+  along for free instead of costing its own test cycle.
+
+#### Scene fallback is landed but unproven
+
+`scene` returned `"Landing"`, which is correct — but Landing was also the **active scene**, so
+`combat.scene?.name` and the fallback return the same string and the test cannot distinguish them.
+Benign: worst case the fallback is dead code. To actually exercise it, read a combat that is not
+bound to a scene.
 
 #### Why the cherry-pick was abandoned (do the same on every future re-port)
 
@@ -522,6 +572,8 @@ and it lands in a live session.
 
 **Steps**
 
+- [ ] **Rider from Phase 1:** use `combat.turns` for turn order in `getActiveCombat`, falling back
+      to the manual sort. Fixes tied-initiative ordering. Free here — same file, same deploy.
 - [ ] Re-graft `buildRollFormula` from `master` onto upstream's `data-access.ts` (row 6, 98 ln)
 - [ ] Re-graft the `requestPlayerRolls` speaker priority (row 7, 7 ln)
 - [ ] Re-graft the `attachRollButtonHandlers` speaker fallback (row 8, 1 ln)
