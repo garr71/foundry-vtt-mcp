@@ -9929,6 +9929,69 @@ export class FoundryDataAccess {
   }
 
   // ─── mgt2e ──────────────────────────────────────────────────────────────────
+
+  // ===== COMBAT TRACKER =====
+
+  /**
+   * Get the active combat encounter state: round, turn, initiative order, and combatant status.
+   */
+  async getActiveCombat(): Promise<any> {
+    this.validateFoundryState();
+
+    const combat = (game as any).combat;
+    if (!combat) {
+      return { active: false };
+    }
+
+    const combatants = (combat.combatants?.contents || []).map((c: any) => {
+      const token = c.token;
+      return {
+        id: c.id,
+        name: c.name ?? token?.name ?? 'Unknown',
+        actorId: c.actorId,
+        tokenId: c.tokenId,
+        initiative: c.initiative,
+        hasRolledInitiative: c.initiative !== null && c.initiative !== undefined,
+        isCurrentTurn: combat.combatant?.id === c.id,
+        defeated: c.isDefeated ?? false,
+        hidden: c.hidden ?? false,
+        tokenHidden: token?.hidden ?? false,
+        disposition: (() => {
+          const d = token?.disposition ?? -1;
+          if (d === 1) return 'friendly';
+          if (d === 0) return 'neutral';
+          return 'hostile';
+        })(),
+      };
+    });
+
+    // Sort by initiative descending (unrolled entries go last)
+    combatants.sort((a: any, b: any) => {
+      if (a.initiative === null || a.initiative === undefined) return 1;
+      if (b.initiative === null || b.initiative === undefined) return -1;
+      return b.initiative - a.initiative;
+    });
+
+    const currentCombatant = combat.combatant;
+
+    return {
+      active: combat.started ?? false,
+      round: combat.round ?? 0,
+      turn: combat.turn ?? 0,
+      currentTurn: currentCombatant
+        ? {
+            id: currentCombatant.id,
+            name: currentCombatant.name ?? currentCombatant.token?.name ?? 'Unknown',
+            initiative: currentCombatant.initiative,
+          }
+        : null,
+      combatants,
+      totalCombatants: combatants.length,
+      // A combat need not be bound to a scene; fall back to the active scene so
+      // the caller still gets a usable name instead of null.
+      scene: combat.scene?.name ?? (game.scenes as any)?.active?.name ?? null,
+    };
+  }
 }
 
 // =============================================================================

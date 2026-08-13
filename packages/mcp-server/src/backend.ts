@@ -39,6 +39,8 @@ import { MapGenerationTools } from './tools/map-generation.js';
 
 import { TokenManipulationTools } from './tools/token-manipulation.js';
 
+import { CombatTools } from './tools/combat.js';
+
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
 
 import { DnD5eAddFeatureTool } from './tools/dnd5e/add-feature.js';
@@ -1216,6 +1218,8 @@ async function startBackend(): Promise<void> {
   const wfrp4eUpdateActorTools = new WFRP4eUpdateActorTools({ foundryClient, logger });
   const wfrp4eAddItemsTools = new WFRP4eAddItemsTools({ foundryClient, logger });
 
+  const combatTools = new CombatTools({ foundryClient, logger });
+
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
   let mapGenerationComfyUIClient: any = null;
@@ -1441,6 +1445,8 @@ async function startBackend(): Promise<void> {
     ...wfrp4eAddItemsTools.getToolDefinitions(),
 
     ...tokenManipulationTools.getToolDefinitions(),
+
+    ...combatTools.getToolDefinitions(),
 
     ...mapGenerationTools.getToolDefinitions(),
   ];
@@ -1747,6 +1753,12 @@ async function startBackend(): Promise<void> {
 
                 case 'switch-scene':
                   result = await mapGenerationTools.switchScene(args);
+
+                  break;
+
+                // Combat tools
+                case 'get-combat-tracker':
+                  result = await combatTools.handleGetCombatTracker(args);
 
                   break;
 

@@ -108,6 +108,9 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.upload-generated-map`] =
       this.handleUploadGeneratedMap.bind(this);
 
+    // Combat tracker queries
+    CONFIG.queries[`${modulePrefix}.getActiveCombat`] = this.handleGetActiveCombat.bind(this);
+
     // Item usage queries
     CONFIG.queries[`${modulePrefix}.useItem`] = this.handleUseItem.bind(this);
 
@@ -1474,6 +1477,18 @@ export class QueryHandlers {
         `Failed to get available conditions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * Handle get active combat request
+   */
+  private async handleGetActiveCombat(): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getActiveCombat();
   }
 
   /**
