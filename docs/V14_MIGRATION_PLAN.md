@@ -187,21 +187,57 @@ in that file is ours.
 
 ---
 
+## Module dependency sweep (2026-08-13)
+
+Franklin's call: **make the fork whole first, then recheck the module-dependent tools fresh.** This
+sweep decides what that means concretely. It was built by grepping the port source for
+`game.modules.get(...)` guards, **not** by reading the plan — the plan's prose about modules has
+now been wrong three times running.
+
+| Class                       | What it means                                                    | Items                                                                                                                                         | Where      |
+| --------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| **Hard module dep**         | Guarded; refuses to run without the module                       | `set-quest-visibility`, `set-quest-checklist-item` (Simple Quest)                                                                             | **→ 7a**   |
+| **Soft module interaction** | Core-Foundry code that misbehaves on module-managed documents    | `update-quest-journal replaceContent` on SQ quest pages                                                                                       | 5 + **7a** |
+| **System-dependent**        | Depends on the _game system_ (pf2e/sf2e), not an optional module | roll modifiers (done), `extractTokenActorStats` stat block                                                                                    | 1.5, 4     |
+| **No external dep**         | Core Foundry only                                                | `get-combat-tracker`, `read-chat`, `send-chat-message`, `show-journal-to-players`, all 3 playlist tools, `get-token-distances`, hidden tokens | 1-4        |
+
+**Result: exactly two of the ten ported tools have a hard module dependency**, and both are Simple
+Quest. Everything else in Phases 1-6 runs on core Foundry or on the game system, so the migration is
+_almost entirely_ insulated from module churn — once those two are lifted out.
+
+Three findings drove where the line is drawn:
+
+1. **Only two guards exist.** `git show master:…/data-access.ts | grep 'game.modules.*get('` returns
+   two hits, both `simple-quest`. No playlist, chat, journal-display or token tool touches a module.
+2. **A missing guard does not mean no dependency.** `replaceContent` has no guard and still corrupts
+   Simple Quest state, because the coupling runs through _document shape_, not an API call. Guards
+   find hard dependencies; only reading the module finds soft ones.
+3. **The game system is not a module.** pf2e work (roll modifiers, stat blocks) stays in the main
+   line — the system is a hard prerequisite for playing at all, not an optional add-on that might be
+   absent or four versions ahead.
+
+**Standing rule, earned the hard way:** before porting anything that touches a third-party module,
+re-verify the behaviour against the **installed** module. Not release notes, not this plan, not a
+grep hit — the call site. _"The symbol still exists" is not "the behaviour still exists."_
+
+---
+
 ## Phases
 
 Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 
-| Phase | Goal                                                  | Files         | Risk         | Status      |
-| ----- | ----------------------------------------------------- | ------------- | ------------ | ----------- |
-| **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done** |
-| 1     | Combat tracker read (re-port)                         | new           | Low          | ✅ **done** |
-| 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ⬜ **NEXT** |
-| 2     | Chat read/send + journal + quest visibility           | new ×2        | Low-Med      | ⬜          |
-| 3     | Playlist control                                      | new           | Low          | ⬜          |
-| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜          |
-| 5     | Quest journal `replaceContent`                        | **shared**    | Med          | ⬜          |
-| 6     | Promote → `master` + docs                             | —             | Low          | ⬜          |
-| —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred |
+| Phase | Goal                                                  | Files         | Risk         | Status       |
+| ----- | ----------------------------------------------------- | ------------- | ------------ | ------------ |
+| **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done**  |
+| 1     | Combat tracker read (re-port)                         | new           | Low          | ✅ **done**  |
+| 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ✅ **done**  |
+| 2     | Chat read/send + journal display                      | new ×2        | Low          | ⬜ **NEXT**  |
+| 3     | Playlist control                                      | new           | Low          | ⬜           |
+| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜           |
+| 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ⬜           |
+| 6     | Promote → `master` + docs                             | —             | Low          | ⬜           |
+| 7     | **Module-dependent** re-integration + enhancements    | new           | Med          | ⬜ _after 6_ |
+| —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred  |
 
 Each phase ends at a working, testable state.
 **Me** = code + build + deploy. **You** = test in Foundry, report.
@@ -690,17 +726,150 @@ sites and restore `?? 0` inline.
 - **Row 7 is visible, not numeric.** It changes who the roll _request_ appears to come from, not
   any value. Confirm the request posts as the GM/`"GM"` actor rather than a bare user.
 
-### Phase 2 — Chat + journal + quest visibility 💬📖 ⬜
+### Phase 2 — Chat + journal display 💬📖 ⬜ (rescoped 2026-08-13)
 
-**Goal:** Five tools, two brand-new files, zero shared-file risk. Highest per-session value left.
+**Goal:** Three tools, two brand-new files, zero shared-file risk, **zero external-module
+dependency**. Highest per-session value left.
+
+> **Rescoped 2026-08-13.** The two Simple Quest tools moved to **Phase 7**. They are the only
+> tools in the entire port with a hard module guard, and Simple Quest changed enough between
+> 3.0.20 and 5.1.4 that re-landing them is a **rebuild, not a re-port** — which would silently
+> violate strategy decision 4. See "Module dependency sweep" for where the line is drawn.
 
 - [ ] Port `chat.ts` (`read-chat`) across the 4 files
-- [ ] Port `journal.ts` (`send-chat-message`, `show-journal-to-players`, `set-quest-visibility`,
-      `set-quest-checklist-item`) across the 4 files, including speaker/portrait resolution
-- [ ] **You:** read recent rolls/messages; have Claude post to chat; show a handout page to players;
-      toggle quest visibility and tick a checklist item
+- [ ] Port `journal.ts` (`send-chat-message`, `show-journal-to-players`) across the 4 files,
+      including speaker/portrait resolution
+- [ ] `journal.ts` is a single 221-line `JournalTools` class holding **four** tools on `master`.
+      Port it with the two quest tools **omitted, not stubbed** — Phase 7 adds them back.
+- [ ] **You:** read recent rolls/messages; have Claude post to chat; show a handout page to players
 - **Gate:** rolls readable; messages post with correct speaker + portrait; correct journal page
-  displays to players; quest visibility and checklist behave as on old `master`.
+  displays to players.
+- **Note:** speaker resolution has a known wrinkle from the Phase 1.5 gate — a target name resolves
+  to the owning _player_ when one is active and to the _character_ otherwise. Expect the same split
+  here, and do not read it as a bug.
+
+### Phase 3 — Playlist control 🎵 ⬜
+
+- [ ] Port `playlist.ts` (`list-playlists`, `play-playlist`, `stop-playlist`) with loop/volume/mode
+- [ ] **You:** play/stop a playlist; test loop and volume
+- **Gate:** audio control works from Claude.
+
+### Phase 4 — Token distances + hidden tokens 📐 ⬜
+
+**Goal:** Second shared-file re-graft, and the highest v14 API-breakage risk (canvas/grid `measurePath`).
+
+> **⚠️ Rescoped in revision 4.** The stat block is **two-sided** and revision 3 listed only the
+> server half. Porting row 3 without row 4 ships a formatter for a payload the module never sends.
+
+- [ ] `token-manipulation.ts`: `get-token-distances` (new tool) + `formatTokenDetails` stat-block
+      extension (row 3, 42 ln)
+- [ ] **`data-access.ts`: `getTokenDetails` → `this.extractTokenActorStats(token.actor)` and the
+      new `extractTokenActorStats` helper (row 4, 5 + 54 ln).** Without this, row 3 has no data.
+- [ ] `scene.ts`: hidden tokens — **two places**, `handleGetCurrentScene`'s zod default (row 1)
+      and `getToolDefinitions`' `includeHidden` default + description (row 2). Both flip
+      `false` → `true`; changing only one leaves the tool and its schema disagreeing.
+- [ ] Check interaction with upstream's `8546b0f` synthetic-token-actor resolution
+- [ ] **You:** confirm hidden tokens appear in `get-current-scene`; request token distances;
+      confirm `get-token-details` returns a full stat block, not just name/type/img
+- **Gate:** distances correct in feet; hidden tokens visible to GM; stat block populated.
+- **Risk:** budget 1-2 fix cycles here specifically. This is the phase most likely to need iteration,
+  and the estimate is a guess, not a measurement.
+
+### Phase 5 — Quest journal `replaceContent` 📜 ⬜
+
+Stays in the main line: **core-Foundry code, no module guard**, an exact 33-line reference, and
+useful on any journal. But it carries a _soft_ module interaction that must ship with it.
+
+- [ ] Re-graft the `replaceContent` mode onto upstream's `update-quest-journal` (33 ln, shared file)
+- [ ] **Add a page-type guard** (~3 ln, the one deliberate addition): refuse `replaceContent` on
+      `page.type === 'simple-quest.quest'` with an explanatory error. Needs no Simple Quest
+      knowledge beyond a string compare, and removes the hazard below entirely.
+- [ ] **You:** test content replacement on a **plain** journal page in the v14 world
+- **Gate:** `replaceContent` behaves as on old `master`; the guard refuses an SQ quest page.
+
+#### ⚠️ `replaceContent` silently wipes Simple Quest objective state
+
+No module guard catches this, because there is nothing to guard — it is plain Foundry journal code.
+The hazard is structural, verified 2026-08-13 against the shipped `quest.json`:
+
+- Objectives live in `page.text.content`, as `<li>` elements.
+- Their state lives **separately** in `system.objectiveState` / `objectiveSecrets`, keyed by a slug
+  **derived from that `<li>` text** at render time (`_getObjectiveKey`).
+
+Rewriting `text.content` changes the derived keys, so every stored entry orphans: all checkboxes
+and secrets reset to unchecked, **with no error and a success response**. Same signature as the
+rest of the Simple Quest work — a write that succeeds and means nothing.
+
+Phase 7 can do this properly by remapping state onto the new keys. Phase 5 just refuses.
+
+### Phase 6 — Promote & document 🏁 ⬜
+
+- [ ] Make `v14-port-v083` the new `master` — **confirm before running**
+- [ ] Archive old sf2e-era `master` and the interim `v14-port` as reference branches
+- [ ] Update `CLAUDE.md`: pf2e + v14 + upstream-synced architecture, corrected tool count
+- [ ] Refresh memory + vault session log
+- **Gate:** you confirm. The only mildly destructive git step in the plan.
+
+### Phase 7 — Module-dependent re-integration & enhancements 🧩 ⬜ (new, 2026-08-13)
+
+**Goal:** Everything whose correctness depends on a **third-party module we do not control**. Runs
+_after_ the fork is whole and promoted, so module churn can never block the migration itself.
+
+**Why this phase exists.** Franklin's call, 2026-08-13: make the fork whole first, then recheck the
+module-dependent tools fresh, because those modules changed a lot. The Simple Quest investigation
+proved the point — three separate plan claims about SQ were wrong, each because the plan described
+3.0.20 behaviour that 5.1.4 no longer has. That work is **not a re-port**: there is no known-good
+reference to copy, because the target moved. Doing it alongside genuine re-ports would quietly
+violate strategy decision 4 while looking like compliance.
+
+**Entry condition:** Phase 6 complete — fork whole, promoted, every core tool proven.
+
+#### 7a — Simple Quest, rebuilt against 5.1.4
+
+- [ ] `set-quest-checklist-item` — new key derivation + `system.objectiveState` storage
+- [ ] `set-quest-visibility` — collapse to a single Foundry-ownership path
+- [ ] `update-quest-journal replaceContent` — replace Phase 5's refusal guard with real key
+      remapping, so content can be rewritten without orphaning objective state
+- [ ] **Re-verify every claim against the installed module before writing.** Three for three have
+      been wrong so far.
+
+Full analysis in "Simple Quest 3.0.20 → 5.1.4" below.
+
+#### 7b — Capability the 5.x rewrite opened up
+
+SQ 5.x turned prose-with-checkboxes into **twelve schema-backed page subtypes** (quest, lore, map,
+character, creature, faction, location, achievement, era, event, investigation). Quest pages carry
+typed fields:
+
+```
+status (-1 Undiscovered / 0 In Progress / 1 Completed / 2 Failed)
+questGiver · location · difficulty · deadline · reward
+observerObjectivePermission (default / allow / deny)
+```
+
+Objectives gained three states (unchecked / checked / **failed**), per-objective secrets, nested
+parent-child auto-checking, and player-toggleable objectives over a socket.
+
+Typed fields are a far better fit for an MCP assistant than string-munging prose — "mark the quest
+failed", "set the deadline" become typed writes. **Logged as opportunity, not commitment.**
+
+#### 7c — Other module-dependent backlog
+
+- [ ] Exalted Scenes + Narrator's Jukebox tools (5 tools; guard with `game.modules.get(id)?.active`)
+- [ ] Re-verify any remaining module assumption inherited from the sf2e era
+
+#### 7d — Non-module items parked for the same reason
+
+Not module-dependent, but each is a **re-derive** rather than a re-port, so they wait for the same
+strategy-decision-4 reason:
+
+- [ ] **Server-side modifier hoist** — move roll-modifier lookup into the system adapters instead of
+      the module-side `isPF2eFamily` chain (deferred from Phase 1.5)
+- [ ] **`get-character` never reports initiative** — upstream pf2e adapter gap found in the Phase
+      1.5 gate; leaves initiative with no server-side cross-check
+- [ ] **`Roll#toMessage` `rollMode` → `messageMode`** — v14 deprecation, breaks on v16
+
+---
 
 #### ⚠️ Simple Quest 3.0.20 → 5.1.4 — **rewritten 2026-08-12, the earlier note was wrong**
 
@@ -812,46 +981,7 @@ The prompt is one-shot (gated on the root folder not existing). If it was declin
 (`"0"` open / `"1"` complete / `"2"` failed). Check `update-quest-journal` against that before
 porting `replaceContent`.
 
-### Phase 3 — Playlist control 🎵 ⬜
-
-- [ ] Port `playlist.ts` (`list-playlists`, `play-playlist`, `stop-playlist`) with loop/volume/mode
-- [ ] **You:** play/stop a playlist; test loop and volume
-- **Gate:** audio control works from Claude.
-
-### Phase 4 — Token distances + hidden tokens 📐 ⬜
-
-**Goal:** Second shared-file re-graft, and the highest v14 API-breakage risk (canvas/grid `measurePath`).
-
-> **⚠️ Rescoped in revision 4.** The stat block is **two-sided** and revision 3 listed only the
-> server half. Porting row 3 without row 4 ships a formatter for a payload the module never sends.
-
-- [ ] `token-manipulation.ts`: `get-token-distances` (new tool) + `formatTokenDetails` stat-block
-      extension (row 3, 42 ln)
-- [ ] **`data-access.ts`: `getTokenDetails` → `this.extractTokenActorStats(token.actor)` and the
-      new `extractTokenActorStats` helper (row 4, 5 + 54 ln).** Without this, row 3 has no data.
-- [ ] `scene.ts`: hidden tokens — **two places**, `handleGetCurrentScene`'s zod default (row 1)
-      and `getToolDefinitions`' `includeHidden` default + description (row 2). Both flip
-      `false` → `true`; changing only one leaves the tool and its schema disagreeing.
-- [ ] Check interaction with upstream's `8546b0f` synthetic-token-actor resolution
-- [ ] **You:** confirm hidden tokens appear in `get-current-scene`; request token distances;
-      confirm `get-token-details` returns a full stat block, not just name/type/img
-- **Gate:** distances correct in feet; hidden tokens visible to GM; stat block populated.
-- **Risk:** budget 1-2 fix cycles here specifically. This is the phase most likely to need iteration,
-  and the estimate is a guess, not a measurement.
-
-### Phase 5 — Quest journal `replaceContent` 📜 ⬜
-
-- [ ] Re-graft the `replaceContent` mode onto upstream's `update-quest-journal` (33 ln, shared file)
-- [ ] **You:** test quest content replacement against Simple Quest 5.1.4 in the v14 world
-- **Gate:** `replaceContent` behaves as on old `master`.
-
-### Phase 6 — Promote & document 🏁 ⬜
-
-- [ ] Make `v14-port-v083` the new `master` — **confirm before running**
-- [ ] Archive old sf2e-era `master` and the interim `v14-port` as reference branches
-- [ ] Update `CLAUDE.md`: pf2e + v14 + upstream-synced architecture, corrected tool count
-- [ ] Refresh memory + vault session log
-- **Gate:** you confirm. The only mildly destructive git step in the plan.
+---
 
 ### Deferred — sf2e adapter + sf2e creature index 🔮 ⏭️
 
@@ -866,10 +996,11 @@ mini-project, only if sf2e one-shots need more than upstream's pf2e adapter prov
    (1, 2, 3) first, risky shared-file phase (4) after.
 2. ~~Tool-name overlap vs upstream?~~ **Resolved 2026-08-12:** zero collisions across all 10 tools.
 3. ~~Merge or re-fork onto upstream?~~ **Resolved 2026-08-12:** re-fork. See Phase R.
-4. **Batching:** strict one-phase-per-test-cycle, or port Phases 1 + 2 + 3 together (all new files)
-   and test in one pass to save deploy round-trips? _Leaning: keep 1 separate as the pattern check,
-   then batch 2 + 3. Keep 4 and 5 separate._
-5. **sf2e adapter:** revisit after Phase 6, or leave deferred indefinitely?
+4. **Batching:** strict one-phase-per-test-cycle, or batch the new-file phases? _Leaning: batch
+   2 + 3 now that 1 has served as the pattern check. Keep 4 and 5 separate._ **Still open.**
+5. ~~Do any remaining phases depend on third-party modules?~~ **Resolved 2026-08-13:** yes, exactly
+   two tools, both Simple Quest, now lifted into Phase 7. See the module dependency sweep.
+6. **sf2e adapter:** revisit after Phase 6, or leave deferred indefinitely?
 
 ---
 
