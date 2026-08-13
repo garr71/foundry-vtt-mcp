@@ -5561,9 +5561,15 @@ export class FoundryDataAccess {
         // Public roll request: visible to all players (empty whisperTargets array)
       }
 
+      // BUG-4: speaker priority — 1) "GM" world actor  2) selected token  3) Gamemaster label
+      const gmActor = (game.actors as any)?.getName('GM');
+      const requestSpeaker = gmActor
+        ? ChatMessage.getSpeaker({ actor: gmActor })
+        : ChatMessage.getSpeaker();
+
       const messageData = {
         content: rollButtonHtml,
-        speaker: ChatMessage.getSpeaker({ actor: game.user }),
+        speaker: requestSpeaker,
         style: (CONST as any).CHAT_MESSAGE_STYLES?.OTHER || 0, // Use style instead of deprecated type
         whisper: whisperTargets,
         flags: {
@@ -5779,6 +5785,26 @@ export class FoundryDataAccess {
   /**
    * Build roll formula based on roll type and target using Foundry's roll data system
    */
+  /**
+   * Warn when a pf2e/sf2e modifier lookup finds nothing.
+   *
+   * Every lookup in buildRollFormula ends in `?? 0`, which silently turns a miss into a
+   * confident, correctly-labelled roll of `1d20 + 0`. That is exactly how the pf2e case went
+   * unnoticed — wrong-but-confident, at the table. This makes the next miss announce itself.
+   */
+  private warnOnMissingModifier(
+    modifier: number | undefined,
+    systemId: string,
+    rollType: string,
+    rollTarget: string
+  ): void {
+    if (modifier !== undefined) return;
+    console.warn(
+      `[${MODULE_ID}] No ${rollType} modifier found for "${rollTarget}" on system "${systemId}" — ` +
+        `falling back to +0. The roll will be labelled correctly but rolled without a modifier.`
+    );
+  }
+
   private buildRollFormula(
     rollType: string,
     rollTarget: string,
@@ -5790,34 +5816,92 @@ export class FoundryDataAccess {
     if (character) {
       // Use Foundry's getRollData() to get calculated modifiers including active effects
       const rollData = character.getRollData() as any; // Type assertion for Foundry's dynamic roll data
+      const systemId = (game as any).system?.id ?? '';
+      const isPF2eFamily = systemId === 'pf2e' || systemId === 'sf2e';
 
       switch (rollType) {
-        case 'ability':
-          // Use calculated ability modifier from roll data
+        case 'ability': {
+          // pf2e/sf2e and dnd5e both use abilities[key].mod
           const abilityMod = rollData.abilities?.[rollTarget]?.mod ?? 0;
           baseFormula = `1d20+${abilityMod}`;
           break;
+        }
 
-        case 'skill':
-          // Map skill name to skill code (D&D 5e uses 3-letter codes)
-          const skillCode = this.getSkillCode(rollTarget);
-          // Use calculated skill total from roll data (includes ability mod + proficiency + bonuses)
-          const skillMod = rollData.skills?.[skillCode]?.total ?? 0;
-          baseFormula = `1d20+${skillMod}`;
-          break;
+        case 'skill': {
+          if (isPF2eFamily) {
+            // pf2e/sf2e: full skill name. getRollData() may or may not include skills;
+            // fall back directly to actor.system.skills if needed.
+            const skillName = rollTarget.toLowerCase();
+            const systemSkills = (character as any).system?.skills;
+            const skillData = rollData.skills?.[skillName] ?? systemSkills?.[skillName];
+            // sf2e uses totalModifier; pf2e uses value; try both
+            let skillMod = skillData?.totalModifier ?? skillData?.value ?? skillData?.mod;
 
-        case 'save':
-          // Use saving throw modifier from roll data
-          const saveMod =
-            rollData.abilities?.[rollTarget]?.save ?? rollData.abilities?.[rollTarget]?.mod ?? 0;
-          baseFormula = `1d20+${saveMod}`;
-          break;
+            // PF2e/SF2e: Perception is NOT in system.skills — it lives in system.perception
+            if (skillMod === undefined && skillName === 'perception') {
+              const percData = (character as any).system?.perception ?? rollData.perception;
+              skillMod = percData?.totalModifier ?? percData?.value ?? percData?.mod;
+            }
 
-        case 'initiative':
-          // Use initiative modifier from attributes or dex mod
-          const initMod = rollData.attributes?.init?.mod ?? rollData.abilities?.dex?.mod ?? 0;
-          baseFormula = `1d20+${initMod}`;
+            this.warnOnMissingModifier(skillMod, systemId, 'skill', rollTarget);
+            baseFormula = `1d20+${skillMod ?? 0}`;
+          } else {
+            // dnd5e: 3-letter skill code, total field
+            const skillCode = this.getSkillCode(rollTarget);
+            const skillMod = rollData.skills?.[skillCode]?.total ?? 0;
+            baseFormula = `1d20+${skillMod}`;
+          }
           break;
+        }
+
+        case 'save': {
+          if (isPF2eFamily) {
+            // pf2e/sf2e saves: fortitude/reflex/will
+            const saveName = rollTarget.toLowerCase();
+            const systemSaves = (character as any).system?.saves;
+            const saveData = rollData.saves?.[saveName] ?? systemSaves?.[saveName];
+            const saveMod = saveData?.totalModifier ?? saveData?.value ?? saveData?.mod;
+
+            this.warnOnMissingModifier(saveMod, systemId, 'save', rollTarget);
+            baseFormula = `1d20+${saveMod ?? 0}`;
+          } else {
+            // dnd5e: abilities[key].save
+            const saveMod =
+              rollData.abilities?.[rollTarget]?.save ?? rollData.abilities?.[rollTarget]?.mod ?? 0;
+            baseFormula = `1d20+${saveMod}`;
+          }
+          break;
+        }
+
+        case 'initiative': {
+          if (isPF2eFamily) {
+            // pf2e/sf2e: check attributes.initiative, then perception, then dex
+            const systemAttrs = (character as any).system?.attributes;
+            const systemPerc = (character as any).system?.perception;
+            const initData = rollData.attributes?.initiative ?? systemAttrs?.initiative;
+            const percData =
+              rollData.perception ??
+              rollData.attributes?.perception ??
+              systemPerc ??
+              systemAttrs?.perception;
+            const initMod =
+              initData?.totalModifier ??
+              initData?.mod ??
+              initData?.value ??
+              percData?.totalModifier ??
+              percData?.mod ??
+              percData?.value ??
+              rollData.abilities?.dex?.mod;
+
+            this.warnOnMissingModifier(initMod, systemId, 'initiative', rollTarget);
+            baseFormula = `1d20+${initMod ?? 0}`;
+          } else {
+            // dnd5e: attributes.init.mod
+            const initMod = rollData.attributes?.init?.mod ?? rollData.abilities?.dex?.mod ?? 0;
+            baseFormula = `1d20+${initMod}`;
+          }
+          break;
+        }
 
         case 'custom':
           baseFormula = rollTarget; // Use rollTarget as the formula directly
@@ -6037,7 +6121,7 @@ export class FoundryDataAccess {
         }
 
         const messageData: any = {
-          speaker: ChatMessage.getSpeaker({ actor: character }),
+          speaker: character ? ChatMessage.getSpeaker({ actor: character }) : { alias: rollLabel },
           flavor: `${rollLabel} ${isGmRoll ? '(GM Override)' : ''}`,
           ...(whisperTargets.length > 0 ? { whisper: whisperTargets } : {}),
         };
@@ -9943,7 +10027,14 @@ export class FoundryDataAccess {
       return { active: false };
     }
 
-    const combatants = (combat.combatants?.contents || []).map((c: any) => {
+    // Prefer combat.turns: Foundry builds it via Combat#setupTurns, which applies the
+    // system's own tie-break (pf2e overrides it) and is what the GM actually sees in the
+    // tracker. combat.combatants.contents is raw collection order, so tied initiatives
+    // would come back in document order instead. Fall back to it only if turns is empty.
+    const orderedTurns = combat.turns?.length ? combat.turns : null;
+    const source = orderedTurns ?? combat.combatants?.contents ?? [];
+
+    const combatants = source.map((c: any) => {
       const token = c.token;
       return {
         id: c.id,
@@ -9965,12 +10056,16 @@ export class FoundryDataAccess {
       };
     });
 
-    // Sort by initiative descending (unrolled entries go last)
-    combatants.sort((a: any, b: any) => {
-      if (a.initiative === null || a.initiative === undefined) return 1;
-      if (b.initiative === null || b.initiative === undefined) return -1;
-      return b.initiative - a.initiative;
-    });
+    // Only sort when we had to fall back — combat.turns is already in authoritative order,
+    // and re-sorting it would throw away the very tie-break we asked for.
+    if (!orderedTurns) {
+      // Sort by initiative descending (unrolled entries go last)
+      combatants.sort((a: any, b: any) => {
+        if (a.initiative === null || a.initiative === undefined) return 1;
+        if (b.initiative === null || b.initiative === undefined) return -1;
+        return b.initiative - a.initiative;
+      });
+    }
 
     const currentCombatant = combat.combatant;
 
