@@ -544,7 +544,7 @@ in that case, and `null` survives as the last resort.
   real gate criteria (round, current turn) the encounter must actually be started in Foundry.
 - Combatants with no initiative sort **last** and report `initiative: 'not rolled'`.
 
-### Phase 1.5 — `request-player-rolls` repairs 🎲 🔄 (code done, deployed, awaiting gate)
+### Phase 1.5 — `request-player-rolls` repairs 🎲 ✅ DONE (gate passed 2026-08-12)
 
 **Goal:** Restore the three `request-player-rolls` fixes the port inventory forgot — rows 6, 7
 and 8. Not new work: all three have exact references on `master`.
@@ -585,11 +585,70 @@ and it lands in a live session.
       module-side `if (isPF2eFamily)` chain. **Decided 2026-08-12: module-side re-port.** See below.
 - [x] Built, typechecked, deployed. **Module-only** — server bundle and tool list unchanged, so no
       backend restart and no Claude Desktop restart.
-- [ ] **You:** request a Perception skill check, an Athletics skill check, a Reflex save, and an
+- [x] **You:** request a Perception skill check, an Athletics skill check, a Reflex save, and an
       initiative roll for a pf2e PC
 - **Gate:** each rolls with the character's real modifier. Cross-check against `get-character`,
   which already reports correct values (Amiri: athletics +7, acrobatics +5, intimidation +4).
 - **Note:** `rollType: 'custom'` already works and is the workaround until this lands.
+
+**Phase 1.5 gate results (2026-08-12)** — Amiri (Level 1), pf2e, four rolls cross-checked
+against `get-character`.
+
+| #   | Roll               | Rolled   | Sheet reports         | Verdict                        |
+| --- | ------------------ | -------- | --------------------- | ------------------------------ |
+| 1   | Perception (skill) | `1d20+5` | `perception` 5        | ✅ **the observed bug, fixed** |
+| 2   | Athletics (skill)  | `1d20+7` | `athletics` 7         | ✅                             |
+| 3   | Reflex (save)      | `1d20+5` | `saves.reflex` 5      | ✅                             |
+| 4   | Initiative         | `1d20+5` | _not reported at all_ | ✅ verified indirectly, below  |
+
+**Gate verdict: PASS.** Perception — the case proven broken at `1d20 + 0` in Phase R — now rolls
+`1d20 + 5`. No `+0` appeared on any of the four.
+
+#### `warnOnMissingModifier` paid for itself on its first run
+
+Row 4 had no sheet value to compare against, so on chat output alone it was unfalsifiable: `+5`
+could equally be a correct lookup or a `?? 0` miss that happened to look plausible. The helper
+closes that gap from the other side — it logs on **any** pf2e/sf2e lookup resolving `undefined`,
+and **it did not fire**. The console was being watched closely enough to catch the unrelated
+`rollMode` deprecation, so a miss would have been seen.
+
+`+5` therefore came from a real field. With the cascade order (`attributes.initiative` →
+perception → dex) and Perception at 5, initiative resolved correctly.
+
+**The general lesson:** a silent fallback makes a whole class of results unverifiable from the
+outside. One console warning converts "cannot compare" into "verified", at the cost of four call
+sites. Worth repeating anywhere a `?? default` hides a lookup.
+
+#### Upstream gap found: `get-character` never reports initiative
+
+Not ours, and not a Phase 1.5 defect — `packages/mcp-server/src/systems/pf2e/` contains **no
+reference to initiative at all**, so the adapter cannot report it. `get-character` returns
+abilities, skills, perception and saves, and nothing else.
+
+Consequence: initiative is the one roll type with **no server-side cross-check available**. If a
+pf2e character has an initiative override (a different statistic selected, or a bonus), neither
+the tool output nor this gate would detect it. Backlog item, not a blocker — the natural place to
+fix it is the same adapter work as the post-Phase-6 hoist.
+
+#### Row 8 is landed but unexercised (same shape as the Phase 1 scene fallback)
+
+`attachRollButtonHandlers`' `{ alias: rollLabel }` fallback only runs when **no character
+resolves**. All four gate rolls resolved Amiri, so the branch never executed. Benign, but do not
+record it as proven. Second time this pattern has appeared — **a defensive fallback is not tested
+by a passing happy path**, and both Phase 1 and Phase 1.5 shipped one unverified.
+
+#### Explained: `targetName` flips between the character and the owning player
+
+Roll 4 returned _"Roll request sent to Dragor"_ where rolls 1-3 said _"Amiri (Level 1)"_, which
+reads like a targeting bug. It is not, and the target never changed.
+
+`findPlayerAndCharacter` sets `targetName` from the **owning player** when an active non-GM owner
+resolves (~L5739), and from the **character** when none does (~L5747). Those are the same two
+branches that drive the `(GM Override)` tag: no owner resolved → the GM rolls it. Rolls 1-3 took
+the character branch and carried `(GM Override)`; roll 4 took the owner branch once the player
+client was connected, and the tag correctly disappeared. Upstream code, untouched by this port.
+
+Worth knowing for Phase 2, which resolves speakers for chat and journal display.
 
 #### Decision: module-side re-port, not the adapter hoist (2026-08-12)
 
