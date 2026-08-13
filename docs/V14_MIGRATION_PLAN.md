@@ -768,6 +768,29 @@ moved; the **checklist** path needs both. Half of `setQuestVisibility` needs no 
       and returns OK. Verify by watching the checkbox/secret marker change **in the Simple Quest
       UI**, never by trusting the response.
 
+**Test fixture: use SQ's own example quest journal.** Answering **Yes** to Simple Quest's
+"Create Extended Structure" prompt imports `assets/example-journals/quest.json` into the Quests
+folder. That page is a ready-made Phase 2 fixture — and its shipped data confirms every claim
+above empirically, rather than by inference from the source:
+
+```json
+"type": "simple-quest.quest",
+"system": {
+  "status": 0,
+  "objectiveSecrets": {},
+  "objectiveState": { "this-is-my-initial-objective": 0, "woah-a-second-objective": 0,
+                      "the-header-shows-all-the-folders-contained-inside": 0 }
+}
+```
+
+New page subtype, state under `system.objectiveState`, slugified keys, values 0/1/2, and an empty
+`objectiveSecrets` so one fixture exercises both `completed` and `revealed`. The long key is
+truncated at 49 chars, which confirms the **slice-to-50 happens before slugify** — the ordering
+detail easiest to get backwards.
+
+The prompt is one-shot (gated on the root folder not existing). If it was declined,
+`createAdvancedFolders()` is exported and can be called from the console.
+
 **Carries into Phase 5:** `completed` also left the flags — quest status is now `system.status`
 (`"0"` open / `"1"` complete / `"2"` failed). Check `update-quest-journal` against that before
 porting `replaceContent`.
