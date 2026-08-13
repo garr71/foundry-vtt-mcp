@@ -175,8 +175,28 @@ and is withdrawn. Their work is not lost: it is the reference material for Phase
       (67 files, hash-verified against the build; no orphaned files left in the destination)
 - [x] Deploy **stock** server bundles — backed up to `dist/_backup_fork_pre_v083/`
       (`backend.bundle.cjs`, `index.bundle.cjs`, `index.cjs`)
-- [ ] **You:** restart Claude Desktop, then verify `get-current-scene` + a dice roll
+- [x] **You:** restart Claude Desktop, then verify `get-current-scene` (**read path**) and
+      `request-player-rolls` (**write path**)
 - **Gate:** stock v0.8.3 connects and works on Foundry v14. New known-good reference established.
+
+> **Gate wording corrected 2026-08-12.** Revision 3 said "verify `get-current-scene` + a dice roll",
+> which is not runnable: **v0.8.3 has no tool that evaluates a roll and returns a number.**
+> The only dice tool is `request-player-rolls`, which posts a clickable button into Foundry chat
+> and returns `Roll request sent successfully!` without a result
+> ([`dice-roll.ts` `handleRequestPlayerRolls`](../packages/mcp-server/src/tools/dice-roll.ts)).
+> That still makes it the right write-path check — it proves the module can create documents in
+> Foundry — but the confirmation is **visual, in the Foundry chat log**, never the tool's response.
+> Same failure mode as the Simple Quest checklist in Phase 2: a success string that means "sent",
+> not "worked".
+
+**Phase R gate results (2026-08-12)**
+
+| Check                               | Result                                                                 |
+| ----------------------------------- | ---------------------------------------------------------------------- |
+| Tool list freshness                 | ✅ 43 tools, `manage-actors` in, `get-combat-tracker` out              |
+| `get-current-scene` (read path)     | ✅ scene "Landing", 5 tokens, dispositions correct, `withoutActors: 0` |
+| `request-player-rolls` (write path) | ⬜ pending                                                             |
+
 - **Heads-up:** the tool list grows (`manage-actors`, `wfrp4e-*`, mgt2e paths). Claude Desktop caches
   the tool list once per session, so kill the backend **before** copying (see Deploy reminder).
 - **Revert:** nothing destructive. `v14-port` and `master` are untouched; restore the installed
