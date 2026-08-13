@@ -100,7 +100,7 @@ Ten tools, ten `data-access` methods, ten `queries.ts` handlers, ten `backend.ts
 ★ already written and **proven on Foundry v14**; re-port onto the new base, do not re-derive.
 ⚠️ needs the Simple Quest 5.x key fix, see Phase 2.
 
-Plus three **shared-file** behaviour changes with no new tool:
+Plus **four** **shared-file** behaviour changes with no new tool:
 
 | Change                                  | File                             | Size   | Phase |
 | --------------------------------------- | -------------------------------- | ------ | ----- |
