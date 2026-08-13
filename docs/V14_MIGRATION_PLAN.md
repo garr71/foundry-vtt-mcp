@@ -740,15 +740,15 @@ scope** (a storage-layer change, not a string fix).
 
 **Compatibility of each thing we port**
 
-| Our write                             | Goes to                                  | SQ 5.1.4 reads                                         | Verdict                              |
-| ------------------------------------- | ---------------------------------------- | ------------------------------------------------------ | ------------------------------------ |
-| `setQuestChecklistItem` `completed`   | `flags.simple-quest.checkboxes.<oldKey>` | `system.objectiveState[slug]`                          | ❌ location **and** key              |
-| `setQuestChecklistItem` `revealed`    | `flags.simple-quest.secret.<oldKey>`     | `system.objectiveSecrets[slug]`                        | ❌ location **and** key              |
-| `setQuestVisibility` section          | `flags.simple-quest.secret.<slug>`       | `system.objectiveSecrets[slug]`                        | ⚠️ key already right, location wrong |
-| `setQuestVisibility` page (quest tab) | `flags.simple-quest.hidden`              | `getFlag(MODULE_ID,'hidden')` (`notifications.js` L46) | ✅ survives                          |
-| `setQuestVisibility` page (lore tab)  | Foundry `ownership`                      | Foundry core                                           | ✅ survives                          |
-| `loreFolderName` lookup               | `game.settings.get('simple-quest', …)`   | still a setting (`settings.js` L51)                    | ✅ survives                          |
-| `stateMap` 0/1/2                      | —                                        | `CHECKBOX_STATE` 0/1/2 unchanged                       | ✅ survives                          |
+| Our write                             | Goes to                                  | SQ 5.1.4 reads                             | Verdict                              |
+| ------------------------------------- | ---------------------------------------- | ------------------------------------------ | ------------------------------------ |
+| `setQuestChecklistItem` `completed`   | `flags.simple-quest.checkboxes.<oldKey>` | `system.objectiveState[slug]`              | ❌ location **and** key              |
+| `setQuestChecklistItem` `revealed`    | `flags.simple-quest.secret.<oldKey>`     | `system.objectiveSecrets[slug]`            | ❌ location **and** key              |
+| `setQuestVisibility` section          | `flags.simple-quest.secret.<slug>`       | `system.objectiveSecrets[slug]`            | ⚠️ key already right, location wrong |
+| `setQuestVisibility` page (quest tab) | `flags.simple-quest.hidden`              | **nothing that gates display** — see below | ❌ **corrected 2026-08-13**          |
+| `setQuestVisibility` page (lore tab)  | Foundry `ownership`                      | Foundry core                               | ✅ survives                          |
+| `loreFolderName` lookup               | `game.settings.get('simple-quest', …)`   | still a setting (`settings.js` L51)        | ✅ survives                          |
+| `stateMap` 0/1/2                      | —                                        | `CHECKBOX_STATE` 0/1/2 unchanged           | ✅ survives                          |
 
 Note the asymmetry: the **section** path already slugifies correctly and only needs its storage
 moved; the **checklist** path needs both. Half of `setQuestVisibility` needs no change at all.
@@ -767,6 +767,23 @@ moved; the **checklist** path needs both. Half of `setQuestVisibility` needs no 
 - [ ] **Failure mode is silent from the tool's side.** A write to the wrong place still succeeds
       and returns OK. Verify by watching the checkbox/secret marker change **in the Simple Quest
       UI**, never by trusting the response.
+
+> **⚠️ Correction, 2026-08-13.** The row above was first recorded as "✅ survives" because
+> `getFlag(MODULE_ID, 'hidden')` is still present in 5.1.4. It is — inside
+> `showQuestNotification` (`notifications.js` L46), where it suppresses the **toast popup only**.
+> It gates no display. That flag has exactly one reader in the module.
+>
+> **Player visibility in SQ 5.x is plain Foundry ownership.** `JournalBrowser.js` filters with
+> `rootFolder.contents.filter(c => c.visible)` (L295) and `testUserPermission(…OBSERVER)` (L367);
+> neither consults the flag. `system.status === -1` ("Undiscovered") is a **categorisation label**
+> used to group quests in the browser (L324, L398), not a gate either.
+>
+> Consequence: our quest-page visibility write silences a notification and leaves the page fully
+> readable. The **lore** branch was already correct, so in 5.x the fix is to use ownership for
+> **both** page types — the lore-vs-quest folder branch collapses rather than growing.
+>
+> Lesson, third time this has bitten: **"the symbol still exists" is not "the behaviour still
+> exists".** Grep found the flag; only reading its one call site showed it had been demoted.
 
 **Test fixture: use SQ's own example quest journal.** Answering **Yes** to Simple Quest's
 "Create Extended Structure" prompt imports `assets/example-journals/quest.json` into the Quests
