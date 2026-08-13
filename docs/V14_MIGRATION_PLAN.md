@@ -7,8 +7,15 @@
 > This file is the source of truth for resuming after breaks. Update the **Status** column
 > as we complete each phase.
 >
-> _Revision 4, 2026-08-12. Port inventory rebuilt by method-level audit
+> _Revision 5, 2026-08-13. Port inventory rebuilt by method-level audit
 > ([`scripts/port-audit/`](../scripts/port-audit/)), not by reading commit messages._
+>
+> **What changed in revision 5:** Phase 2 is code-complete and awaiting its gate. It is the first
+> phase where a **faithful** re-port would have shipped broken code: `getRecentChat` reads the
+> `ChatMessage` document directly, and v14 removed `ChatMessage#user` with no deprecation shim.
+> Caught by reading the installed v14 client source, whose location is now recorded in Phase 2.
+> The standing "verify against the installed module" rule is generalised to core Foundry.
+> Stale Phase 2 → Phase 7a cross-references cleaned up after the 2026-08-13 rescope.
 >
 > **What changed in revision 4:** Phase R is done. The shared-file inventory went from 3 entries
 > to 8; four were missing, one of which (`buildRollFormula`) had already shipped as a live
@@ -30,7 +37,7 @@
 - **Old Foundry v13 data:** `D:\FoundryVTTdata` (legacy `foundry-mcp-bridge` lives here)
 - **New Foundry v14 data:** `D:\FoundryData-Paizo` (pf2e/sf2e; the module goes here)
 - **Installed MCP server:** `C:\Users\Franklin Figueroa\AppData\Local\FoundryMCPServer\`
-- **Simple Quest:** v13 world has **3.0.20**, v14 world has **5.1.4** (breaking, see Phase 2)
+- **Simple Quest:** v13 world has **3.0.20**, v14 world has **5.1.4** (breaking, see Phase 7a)
 
 ### Strategy decisions
 
@@ -102,15 +109,16 @@ The **shared-file** half was not accurate. See the next section.
 | `read-chat`                | `chat.ts` (new)                      | `getRecentChat`         | 2     | `master`       |
 | `send-chat-message`        | `journal.ts` (new)                   | `sendChatMessage`       | 2     | `master`       |
 | `show-journal-to-players`  | `journal.ts` (new)                   | `showJournalToPlayers`  | 2     | `master`       |
-| `set-quest-visibility`     | `journal.ts` (new)                   | `setQuestVisibility`    | 2     | `master` ⚠️    |
-| `set-quest-checklist-item` | `journal.ts` (new)                   | `setQuestChecklistItem` | 2     | `master` ⚠️    |
+| `set-quest-visibility`     | `journal.ts` (new)                   | `setQuestVisibility`    | 7a    | none ⚠️        |
+| `set-quest-checklist-item` | `journal.ts` (new)                   | `setQuestChecklistItem` | 7a    | none ⚠️        |
 | `list-playlists`           | `playlist.ts` (new)                  | `getPlaylists`          | 3     | `master`       |
 | `play-playlist`            | `playlist.ts` (new)                  | `playPlaylist`          | 3     | `master`       |
 | `stop-playlist`            | `playlist.ts` (new)                  | `stopPlaylist`          | 3     | `master`       |
 | `get-token-distances`      | `token-manipulation.ts` (**shared**) | `getTokenDistances`     | 4     | `master`       |
 
 ★ already written and **proven on Foundry v14**; re-port onto the new base, do not re-derive.
-⚠️ needs the Simple Quest 5.x key fix, see Phase 2.
+⚠️ **not a re-port.** Simple Quest moved its state out of flags between 3.0.20 and 5.1.4, so the
+`master` code is a reference for _intent_ only, not for code. Rebuilt in Phase 7a.
 
 ### Shared-file in-place edits — rebuilt from the diff, revision 4
 
@@ -182,8 +190,13 @@ in that file is ours.
 
 > **Correction (revision 2, still current):** `journal.ts` is a single 221-line `JournalTools`
 > class holding four tools. Revision 1 split those across three phases, which was not portable.
-> They now land together in Phase 2. `quest-creation.ts` never contained `set-quest-visibility`
-> or the checklist tool, so revision 1's Phase 6 was mis-scoped.
+> They were re-scoped to land together in Phase 2. `quest-creation.ts` never contained
+> `set-quest-visibility` or the checklist tool, so revision 1's Phase 6 was mis-scoped.
+>
+> **Superseded 2026-08-13:** the class splits after all, but along a different seam than revision 1
+> drew — the two Simple Quest tools went to Phase 7a (module dependency), and the two core-Foundry
+> tools shipped in Phase 2. The lesson holds in a sharper form: split a class by _what its tools
+> depend on_, not by tool count or by which phase looks conveniently sized.
 
 ---
 
@@ -231,7 +244,7 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done**  |
 | 1     | Combat tracker read (re-port)                         | new           | Low          | ✅ **done**  |
 | 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ✅ **done**  |
-| 2     | Chat read/send + journal display                      | new ×2        | Low          | ⬜ **NEXT**  |
+| 2     | Chat read/send + journal display                      | new ×2        | Low          | 🔄 **gate**  |
 | 3     | Playlist control                                      | new           | Low          | ⬜           |
 | 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜           |
 | 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ⬜           |
@@ -311,7 +324,7 @@ and is withdrawn. Their work is not lost: it is the reference material for Phase
 > ([`dice-roll.ts` `handleRequestPlayerRolls`](../packages/mcp-server/src/tools/dice-roll.ts)).
 > That still makes it the right write-path check — it proves the module can create documents in
 > Foundry — but the confirmation is **visual, in the Foundry chat log**, never the tool's response.
-> Same failure mode as the Simple Quest checklist in Phase 2: a success string that means "sent",
+> Same failure mode as the Simple Quest checklist in Phase 7a: a success string that means "sent",
 > not "worked".
 
 **Phase R gate results (2026-08-12)**
@@ -736,17 +749,96 @@ dependency**. Highest per-session value left.
 > 3.0.20 and 5.1.4 that re-landing them is a **rebuild, not a re-port** — which would silently
 > violate strategy decision 4. See "Module dependency sweep" for where the line is drawn.
 
-- [ ] Port `chat.ts` (`read-chat`) across the 4 files
-- [ ] Port `journal.ts` (`send-chat-message`, `show-journal-to-players`) across the 4 files,
+- [x] Port `chat.ts` (`read-chat`) across the 4 files
+- [x] Port `journal.ts` (`send-chat-message`, `show-journal-to-players`) across the 4 files,
       including speaker/portrait resolution
-- [ ] `journal.ts` is a single 221-line `JournalTools` class holding **four** tools on `master`.
+- [x] `journal.ts` is a single 221-line `JournalTools` class holding **four** tools on `master`.
       Port it with the two quest tools **omitted, not stubbed** — Phase 7 adds them back.
+- [x] Built, typechecked, formatted, bundled, deployed (both packages, matched pair).
+      Diff is **284 insertions, 0 deletions** — no upstream line touched, same shape as Phase 1.
+      Control-port probe: **47 tools** = 43 stock + `get-combat-tracker` + the 3 new ones,
+      with both Simple Quest tools confirmed absent.
 - [ ] **You:** read recent rolls/messages; have Claude post to chat; show a handout page to players
 - **Gate:** rolls readable; messages post with correct speaker + portrait; correct journal page
   displays to players.
 - **Note:** speaker resolution has a known wrinkle from the Phase 1.5 gate — a target name resolves
   to the owning _player_ when one is active and to the _character_ otherwise. Expect the same split
   here, and do not read it as a bug.
+
+#### ⚠️ The port source was v13 code — `getRecentChat` needed three v14 corrections
+
+This is the first phase where **a faithful re-port would have shipped broken code**. Phases 1 and
+1.5 grafted cleanly; `getRecentChat` reads the `ChatMessage` document directly, and v14 changed
+that document's shape. All three were caught by reading the installed v14 client source
+(see below), not at the gate.
+
+| #   | `master` (v13) wrote                      | v14 reality                                                               | Now                                        |
+| --- | ----------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------ |
+| 1   | `game.users.get(msg.user?.id ?? …)?.name` | **`user` is gone, with no shim.** `ChatMessage#author` is a resolved User | `msg.author?.name ?? speaker.alias`        |
+| 2   | `type: msg.type`                          | `type` is now the _document subtype_ (`"base"`), not the v11 numeric type | `style: msg.style` (`CHAT_MESSAGE_STYLES`) |
+| 3   | `rollsOnly` filter `\|\| msg.type === 5`  | dead — nothing is ever `5`; `CHAT_MESSAGE_STYLES` tops out at 3           | `msg.isRoll` (the supported getter)        |
+
+**Row 1 is the dangerous one, and it is the project's recurring failure mode a fourth time.**
+`msg.user` resolving to `undefined` does not throw — it falls through `?? msg.speaker?.alias`,
+which is populated on most roll and IC messages. Chat reads would have looked _correct_ in exactly
+the cases most likely to be tested, and reported `"Unknown"` only on OOC messages with no alias.
+Nothing in the output would have said "this field is guessing".
+
+Row 3 was harmless (the `rolls.length > 0` clause already carried the filter) and row 2 only
+polluted the payload with a constant string. Row 1 alone justified the check.
+
+**Rule, generalised from the "installed module" rule:** the standing rule said re-verify against
+the **installed module** before porting anything that touches one. Extend it — _re-verify against
+the installed **Foundry** before porting anything that reads a document's shape._ Core is not
+exempt from major-version drift; it just breaks more quietly, because core keeps deprecation shims
+for two generations and then removes them without one.
+
+#### 📍 The v14 client source is on disk — use it, it settles these in minutes
+
+```
+C:\FoundryVTT-v14-Paizo\Foundry Virtual Tabletop\resources\app\client\    ← readable ESM source
+C:\FoundryVTT-v14-Paizo\Foundry Virtual Tabletop\resources\app\common\    ← document schemas
+```
+
+Found via `Get-Process | ? ProcessName -like '*oundry*' | Select Path` — the install is **not** in
+`C:\Program Files\Foundry Virtual Tabletop` (that directory exists but is empty). `resources/app/package.json`
+confirms `"generation": 14`.
+
+The two files that answered everything this phase:
+
+- `common/documents/chat-message.mjs` — `defineSchema()`, the authoritative field list. This is
+  where `author: new fields.DocumentAuthorField(...)` and the **absence of `user`** are visible.
+- `client/documents/collections/journal.mjs` — `Journal.show` / `Journal._showEntry`.
+
+Grepping for a deprecation shim (`get user`, `_addDataFieldShim`, `deprecat`) in **both** the
+common and client document files is the cheap check: a field with no shim and no schema entry is
+simply gone.
+
+#### ✅ Verified unchanged on v14 — ported byte-faithfully
+
+Everything `sendChatMessage` and `showJournalToPlayers` touch was checked and needed no edit:
+
+| API                                     | v14 status                                                                          |
+| --------------------------------------- | ----------------------------------------------------------------------------------- |
+| `Journal.show(doc, { force })`          | intact; still accepts a `JournalEntryPage`                                          |
+| `Journal._showEntry` single-page mode   | intact — a page arg still sets `VIEW_MODES.SINGLE` + `pageId`                       |
+| `ChatMessage.getSpeaker({token,actor})` | intact; `token` must be a `Token`/`TokenDocument` — `scene.tokens.find()` gives one |
+| `game.scenes.current`                   | intact (viewed scene if canvas ready, else active)                                  |
+| `ChatMessage.create` + `style`          | already proven live by the Phase 1.5 roll request                                   |
+
+`Journal.show` also confirms the tool description's "AND the GM" claim: `_showEntry` runs locally
+in the socket callback, so the GM's own client renders it too.
+
+#### Notes for the gate
+
+- **`read-chat` is GM-gated** in `queries.ts`, like every other query. Read it from a GM session.
+- **Check the `author` field specifically**, on a message with no speaker alias (a plain OOC
+  message typed in chat). That is the one case where the v13 code would have said `"Unknown"`,
+  so it is the case that proves row 1 landed rather than merely looking plausible.
+- **`send-chat-message` with an unknown speaker name is not an error** — it posts under that name
+  as a plain alias. Only a _matched_ actor gets a portrait.
+- **A backend is already running** (started by hand, PID logged at deploy time). Per the Phase R
+  race note, start Claude Desktop _while it is up_ so neither wrapper needs to spawn one.
 
 ### Phase 3 — Playlist control 🎵 ⬜
 
@@ -922,7 +1014,7 @@ scope** (a storage-layer change, not a string fix).
 Note the asymmetry: the **section** path already slugifies correctly and only needs its storage
 moved; the **checklist** path needs both. Half of `setQuestVisibility` needs no change at all.
 
-**Required work for Phase 2**
+**Required work for Phase 7a**
 
 - [ ] Key derivation → `text.trim().slice(0, 50).slugify({ strict: true })`. Order matters:
       **slice before slugify**, matching `_getObjectiveKey`.
@@ -956,7 +1048,7 @@ moved; the **checklist** path needs both. Half of `setQuestVisibility` needs no 
 
 **Test fixture: use SQ's own example quest journal.** Answering **Yes** to Simple Quest's
 "Create Extended Structure" prompt imports `assets/example-journals/quest.json` into the Quests
-folder. That page is a ready-made Phase 2 fixture — and its shipped data confirms every claim
+folder. That page is a ready-made Phase 7a fixture — and its shipped data confirms every claim
 above empirically, rather than by inference from the source:
 
 ```json

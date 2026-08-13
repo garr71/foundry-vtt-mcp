@@ -10014,6 +10014,211 @@ export class FoundryDataAccess {
 
   // ─── mgt2e ──────────────────────────────────────────────────────────────────
 
+  // ===== CHAT / ROLL READING =====
+
+  /**
+   * Return recent chat messages, optionally filtered to roll results only.
+   * Strips HTML from content so the MCP server receives clean text.
+   */
+  async getRecentChat(options: { count?: number; rollsOnly?: boolean } = {}): Promise<any> {
+    this.validateFoundryState();
+
+    const count = Math.min(options.count ?? 20, 100);
+    const rollsOnly = options.rollsOnly ?? false;
+
+    const allMessages = game.messages?.contents || [];
+
+    // Take the last `count` messages (contents is ordered oldest-first)
+    const slice = allMessages.slice(-count);
+
+    const results = slice
+      .filter((msg: any) => {
+        if (rollsOnly) {
+          // v14: ChatMessage#type is the document subtype ('base'), not the v11 numeric type.
+          // ChatMessage#isRoll is the supported check; the rolls array is the fallback.
+          return msg.isRoll === true || (msg.rolls?.length ?? 0) > 0;
+        }
+        return true;
+      })
+      .map((msg: any) => {
+        // Extract roll data if present
+        const rolls = (msg.rolls || []).map((roll: any) => ({
+          formula: roll.formula ?? '',
+          total: roll.total ?? null,
+          result: roll.result ?? String(roll.total ?? ''),
+        }));
+
+        // Strip HTML tags for clean text
+        const rawContent: string = msg.content ?? '';
+        const cleanContent = rawContent
+          .replace(/<[^>]*>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        const speaker = msg.speaker ?? {};
+
+        return {
+          id: msg.id,
+          timestamp: msg.timestamp,
+          // v14: `style` (CHAT_MESSAGE_STYLES number) replaced the old numeric `type`.
+          style: msg.style ?? 0,
+          // v14: ChatMessage#author is a resolved User document. `msg.user`/`msg.userId`
+          // were removed with no shim, so the old lookup silently yielded the speaker alias.
+          author: msg.author?.name ?? speaker.alias ?? 'Unknown',
+          speaker: {
+            alias: speaker.alias ?? null,
+            actor: speaker.actor
+              ? ((game.actors?.get(speaker.actor) as any)?.name ?? speaker.alias)
+              : null,
+            token: speaker.token ?? null,
+          },
+          flavor: msg.flavor ? msg.flavor.replace(/<[^>]*>/g, '').trim() : null,
+          content: cleanContent,
+          rolls,
+          isRoll: rolls.length > 0,
+          whisper: (msg.whisper || []).length > 0,
+          blind: msg.blind ?? false,
+        };
+      });
+
+    return {
+      messages: results,
+      total: results.length,
+      rollsOnly,
+    };
+  }
+
+  // ===== CHAT NARRATION / JOURNAL DISPLAY =====
+
+  /**
+   * Post a chat message to Foundry VTT as the GM or a named speaker.
+   */
+  async sendChatMessage(request: {
+    content: string;
+    speaker?: string; // actor name or "GM" — defaults to GM
+    whisper?: boolean; // if true, visible only to GM clients
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const content = request.content?.trim();
+    if (!content) throw new Error('content is required');
+
+    // Resolve speaker
+    let speaker: any;
+    if (request.speaker) {
+      // Exact name lookup first (Foundry built-in), then partial match fallback
+      const byName = (game.actors as any)?.getName(request.speaker);
+      const byFind = game.actors?.find((a: any) =>
+        a.name?.toLowerCase().includes(request.speaker!.toLowerCase())
+      );
+      const actor = (byName ?? byFind) as any;
+
+      if (actor) {
+        // Prefer a token on the current scene — gives token portrait and correct alias
+        const scene = (game.scenes as any)?.current;
+        const sceneToken = scene?.tokens?.find(
+          (t: any) => t.actorId === actor.id || t.actor?.id === actor.id
+        );
+        speaker = sceneToken
+          ? ChatMessage.getSpeaker({ token: sceneToken, actor })
+          : ChatMessage.getSpeaker({ actor });
+      } else {
+        // No actor found — use plain alias object directly (not getSpeaker, which falls back
+        // to the selected token)
+        speaker = { alias: request.speaker };
+      }
+    } else {
+      // GM speaker — use alias "GM"
+      speaker = { alias: 'GM' };
+    }
+
+    // Whisper targets (GM-only clients)
+    const whisperTargets: string[] = [];
+    if (request.whisper) {
+      const gmUsers = game.users?.filter((u: any) => u.isGM) || [];
+      for (const u of gmUsers) {
+        if (u.id) whisperTargets.push(u.id);
+      }
+    }
+
+    const msg = await ChatMessage.create({
+      content,
+      speaker,
+      style: (CONST as any).CHAT_MESSAGE_STYLES?.OTHER ?? 0,
+      whisper: whisperTargets,
+    });
+
+    return {
+      success: true,
+      messageId: msg?.id ?? null,
+      speaker: speaker.alias ?? speaker.actor ?? 'GM',
+      whisper: request.whisper ?? false,
+    };
+  }
+
+  /**
+   * Show a journal entry or a specific page within it to all connected clients including the GM.
+   * Passing a JournalEntryPage to Journal.show() opens the journal in single-page mode showing
+   * only that page — verified against Foundry v14 (`Journal._showEntry` sets VIEW_MODES.SINGLE).
+   */
+  async showJournalToPlayers(request: {
+    journal: string;
+    page?: string; // optional: name or partial name of a page within the journal
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const query = request.journal.toLowerCase();
+    const allJournals = game.journal?.contents || [];
+
+    const entry = allJournals.find(
+      (j: any) =>
+        j.id === request.journal ||
+        j.name?.toLowerCase() === query ||
+        j.name?.toLowerCase().includes(query)
+    ) as any;
+
+    if (!entry) {
+      throw new Error(`Journal entry not found: "${request.journal}"`);
+    }
+
+    // If a page is specified, find it and show only that page
+    if (request.page) {
+      const pageQuery = request.page.toLowerCase();
+      const page = (entry.pages?.contents || []).find(
+        (p: any) =>
+          p.id === request.page ||
+          (p.name ?? '').toLowerCase() === pageQuery ||
+          (p.name ?? '').toLowerCase().includes(pageQuery)
+      );
+
+      if (!page) {
+        throw new Error(`Page "${request.page}" not found in journal "${entry.name}".`);
+      }
+
+      // Pass the page document directly — Foundry opens it in single-page mode
+      await (game as any).journal.constructor.show(page, { force: true });
+
+      return {
+        success: true,
+        message: `Showing page "${page.name}" from "${entry.name}" to all players.`,
+        journalId: entry.id,
+        journalName: entry.name,
+        pageId: page.id,
+        pageName: page.name,
+      };
+    }
+
+    // No page specified — show the whole journal (multi-page view)
+    await (game as any).journal.constructor.show(entry, { force: true });
+
+    return {
+      success: true,
+      message: `Showing journal "${entry.name}" to all players.`,
+      journalId: entry.id,
+      journalName: entry.name,
+    };
+  }
+
   // ===== COMBAT TRACKER =====
 
   /**

@@ -111,6 +111,14 @@ export class QueryHandlers {
     // Combat tracker queries
     CONFIG.queries[`${modulePrefix}.getActiveCombat`] = this.handleGetActiveCombat.bind(this);
 
+    // Chat reading queries
+    CONFIG.queries[`${modulePrefix}.getRecentChat`] = this.handleGetRecentChat.bind(this);
+
+    // Chat narration + journal display queries
+    CONFIG.queries[`${modulePrefix}.sendChatMessage`] = this.handleSendChatMessage.bind(this);
+    CONFIG.queries[`${modulePrefix}.showJournalToPlayers`] =
+      this.handleShowJournalToPlayers.bind(this);
+
     // Item usage queries
     CONFIG.queries[`${modulePrefix}.useItem`] = this.handleUseItem.bind(this);
 
@@ -1489,6 +1497,48 @@ export class QueryHandlers {
     }
     this.dataAccess.validateFoundryState();
     return await this.dataAccess.getActiveCombat();
+  }
+
+  /**
+   * Handle get recent chat request
+   */
+  private async handleGetRecentChat(data: { count?: number; rollsOnly?: boolean }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getRecentChat(data);
+  }
+
+  /**
+   * Handle send chat message request
+   */
+  private async handleSendChatMessage(data: {
+    content: string;
+    speaker?: string;
+    whisper?: boolean;
+  }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    if (!data.content) throw new Error('content is required');
+    return await this.dataAccess.sendChatMessage(data);
+  }
+
+  /**
+   * Handle show journal to players request
+   */
+  private async handleShowJournalToPlayers(data: { journal: string; page?: string }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    if (!data.journal) throw new Error('journal is required');
+    return await this.dataAccess.showJournalToPlayers(data);
   }
 
   /**

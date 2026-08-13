@@ -41,6 +41,10 @@ import { TokenManipulationTools } from './tools/token-manipulation.js';
 
 import { CombatTools } from './tools/combat.js';
 
+import { ChatTools } from './tools/chat.js';
+
+import { JournalTools } from './tools/journal.js';
+
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
 
 import { DnD5eAddFeatureTool } from './tools/dnd5e/add-feature.js';
@@ -1220,6 +1224,10 @@ async function startBackend(): Promise<void> {
 
   const combatTools = new CombatTools({ foundryClient, logger });
 
+  const chatTools = new ChatTools({ foundryClient, logger });
+
+  const journalTools = new JournalTools({ foundryClient, logger });
+
   // Initialize mapgen-style backend components for map generation
   let mapGenerationJobQueue: any = null;
   let mapGenerationComfyUIClient: any = null;
@@ -1447,6 +1455,10 @@ async function startBackend(): Promise<void> {
     ...tokenManipulationTools.getToolDefinitions(),
 
     ...combatTools.getToolDefinitions(),
+
+    ...chatTools.getToolDefinitions(),
+
+    ...journalTools.getToolDefinitions(),
 
     ...mapGenerationTools.getToolDefinitions(),
   ];
@@ -1759,6 +1771,23 @@ async function startBackend(): Promise<void> {
                 // Combat tools
                 case 'get-combat-tracker':
                   result = await combatTools.handleGetCombatTracker(args);
+
+                  break;
+
+                // Chat tools
+                case 'read-chat':
+                  result = await chatTools.handleReadChat(args);
+
+                  break;
+
+                // Journal / narration tools
+                case 'send-chat-message':
+                  result = await journalTools.handleSendChatMessage(args);
+
+                  break;
+
+                case 'show-journal-to-players':
+                  result = await journalTools.handleShowJournalToPlayers(args);
 
                   break;
 
