@@ -248,8 +248,8 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | 1     | Combat tracker read (re-port)                         | new           | Low          | ✅ **done**  |
 | 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ✅ **done**  |
 | 2     | Chat read/send + journal display                      | new ×2        | Low          | ✅ **done**  |
-| 3     | Playlist control                                      | new           | Low          | 🔄 **gate**  |
-| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜           |
+| 3     | Playlist control                                      | new           | Low          | ✅ **done**  |
+| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜ **NEXT**  |
 | 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ⬜           |
 | 6     | Promote → `master` + docs                             | —             | Low          | ⬜           |
 | 7     | **Module-dependent** re-integration + enhancements    | new           | Med          | ⬜ _after 6_ |
@@ -932,13 +932,94 @@ in the socket callback, so the GM's own client renders it too.
 - **A backend is already running** (started by hand, PID logged at deploy time). Per the Phase R
   race note, start Claude Desktop _while it is up_ so neither wrapper needs to spawn one.
 
-### Phase 3 — Playlist control 🎵 🔄 (deployed 2026-08-13, awaiting gate)
+### Phase 3 — Playlist control 🎵 ✅ DONE (gate passed 2026-08-13)
 
 - [x] Port `playlist.ts` (`list-playlists`, `play-playlist`, `stop-playlist`) with loop/volume/mode
 - [x] Built, typechecked, formatted, bundled, deployed (both packages, matched pair).
       **240 insertions, 0 deletions.** Control-port probe: **50 tools** = 43 stock + 7 ported.
-- [ ] **You:** play/stop a playlist; test loop and volume
+- [x] **You:** play/stop a playlist; test loop and volume
 - **Gate:** audio control works from Claude.
+
+**Phase 3 gate results (2026-08-13)** — run against a duplicated `Ambience (Copy)` fixture so no
+real playlist was mutated. Needed two rounds; the first was degenerate, see below.
+
+| Correction                         | Result                                                        |
+| ---------------------------------- | ------------------------------------------------------------- |
+| Row 1 — `soundboard` write → `-1`  | ✅ proven **bidirectionally** (`soundboard ↔ sequential`)    |
+| Row 2 — read `-1` → `'soundboard'` | ✅ proven on all four playlists                               |
+| Row 3 — volume curve               | ✅ write landed (`13% → 35%`); math verified vs `AudioHelper` |
+| `playAll()` soundboard no-op       | ✅ proven on "Loops" — `playing: false` + explanation         |
+| `loop` write                       | ✅ proven bidirectionally (`true → false → true`)             |
+
+**Gate verdict: PASS.**
+
+#### 🎯 Every playlist in this world is in soundboard mode — rows 2 and 4 were load-bearing
+
+Check 1 returned `mode: "soundboard"` for **all four** playlists (Ambience, Ambience (Copy), Loops,
+SFX). That was not the expected result, and it retroactively raises the value of two fixes:
+
+- **Row 2 would have mislabelled 100% of the library.** `master`'s `playlistModeName` has a `case 3`
+  and no `-1`, so every playlist Franklin owns would have reported `"unknown"` in `list-playlists`,
+  silently and permanently.
+- **The `playAll()` no-op branch would have failed every whole-playlist call.** `master` returns a
+  confident `Playing playlist "X".` and produces silence on a DISABLED playlist. Since _every_
+  playlist here is DISABLED, that is every bare `play-playlist` call ever made.
+
+The no-op branch was added from reading Foundry's source, not from knowing the world's contents —
+it turned out to describe the entire setup. **Reading the API's edge cases found a defect that
+testing the happy path could not have**, because here there is no happy path.
+
+#### ⚠️ Round one was degenerate — a write that agrees with the current value proves nothing
+
+The first run set `mode: 'soundboard'` on a playlist already in soundboard mode, and `loop: true`
+on a track already `repeat: true`. Set, read-back and restore were then all indistinguishable from
+the parameter being **silently ignored**. Both had to be re-run starting from the opposite value.
+
+**Rule: a write test must move the value away from its resting state, then back.** One direction is
+not enough either — a write stuck at a constant would pass a single-direction test.
+
+This is the same family as the Phase 1.5 `?? 0` problem and the Phase 2 fixture failure: the
+observation could not distinguish success from no-op. Three phases, three variants. Add to the
+pre-gate checklist alongside "a passing happy path does not test the branch it did not take".
+
+#### ⚠️ A deleted-and-recreated fixture invalidates a timeline
+
+Round two reported the `volume: 0.354` write "reverting" to `13%`, with a careful call-by-call
+timeline narrowing it to three candidate calls. **The fixture had been deleted and re-duplicated
+between rounds.** The new `Ambience (Copy)` is a different document that inherited `13%` from the
+original; nothing overwrote anything. The apparent collection-order instability has the same cause —
+the new copy was created last and appended to the end of `contents`.
+
+The reasoning was sound and the deciding fact simply was not in the record. **Rule: the identity of
+the fixture is part of the evidence.** When a gate spans rounds, re-confirm the fixture is the same
+document — a matching name is not a matching document.
+
+_(Chased on the false premise: `PlaylistSound#debounceVolume` is the only path in Foundry that
+persists a sound's volume besides an explicit `update()`, and its sole caller is the sidebar slider
+handler `_onSoundVolume`, which writes with `diff: false`. Not needed here, but it does mean a stale
+UI slider **can** clobber a programmatic volume write. Worth remembering if volume ever really does
+revert.)_
+
+#### Found during the gate: exact-vs-substring lookup resolves by collection order
+
+`findPlaylist` OR's all three clauses inside a single `find()` predicate:
+
+```ts
+.find(p => p.id === query || p.name.toLowerCase() === lower || p.name.toLowerCase().includes(lower))
+```
+
+`Array#find` returns the first **element** matching **any** clause, so an exact match on a later
+element loses to a substring match on an earlier one. Same single-pass shape in the sound lookup
+inside `playPlaylist`, and in both the journal and page lookups in Phase 2's `showJournalToPlayers`.
+
+Notably **`sendChatMessage` already does it correctly** — `getName()` exact first, _then_ a substring
+pass. So the fix is to match the port's own existing precedent, not to invent anything.
+
+**Latent, not currently biting:** with `Ambience` at index 0 and `Ambience (Copy)` later, searching
+`"Ambience"` still resolves correctly. It bites when a playlist whose name _contains_ the query is
+ordered ahead of the one matching it _exactly_. Filed to 7d — four call sites across Phases 2 and 3.
+
+#### Notes for the gate
 
 #### ⚠️ Three defects in the port source — one would have thrown, two were silent
 
@@ -1117,6 +1198,14 @@ strategy-decision-4 reason:
       internal value, so a track at 0.5 reads `"50%"` while Foundry's slider shows 63%. Decide
       whether to report the UI percentage (matches what you see, but then read and write use
       different scales) or to report both. Found in Phase 3.
+- [ ] **Exact-match lookups lose to substring matches** — `findPlaylist`, the sound lookup in
+      `playPlaylist`, and the journal + page lookups in `showJournalToPlayers` all OR their clauses
+      inside one `find()` predicate, so the first element matching _any_ clause wins and collection
+      order decides. Split exact matching into a prior pass, as `sendChatMessage` already does.
+      Four call sites, Phases 2-3. Latent today. Found in Phase 3.
+- [ ] **`stop-playlist` on a named playlist returns no count** — it reports `Stopped playlist "X"`
+      whether or not anything was playing, while the stop-everything branch returns `stopped: N`.
+      Give the named path the same count so the success string is falsifiable. Found in Phase 3.
 
 ---
 
