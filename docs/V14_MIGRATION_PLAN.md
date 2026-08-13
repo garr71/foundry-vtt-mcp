@@ -191,17 +191,17 @@ in that file is ours.
 
 Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 
-| Phase | Goal                                                  | Files         | Risk         | Status                 |
-| ----- | ----------------------------------------------------- | ------------- | ------------ | ---------------------- |
-| **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done**            |
-| 1     | Combat tracker read (re-port)                         | new           | Low          | ⬜ **NEXT** (proven ★) |
-| 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ⬜                     |
-| 2     | Chat read/send + journal + quest visibility           | new ×2        | Low-Med      | ⬜                     |
-| 3     | Playlist control                                      | new           | Low          | ⬜                     |
-| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜                     |
-| 5     | Quest journal `replaceContent`                        | **shared**    | Med          | ⬜                     |
-| 6     | Promote → `master` + docs                             | —             | Low          | ⬜                     |
-| —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred            |
+| Phase | Goal                                                  | Files         | Risk         | Status               |
+| ----- | ----------------------------------------------------- | ------------- | ------------ | -------------------- |
+| **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done**          |
+| 1     | Combat tracker read (re-port)                         | new           | Low          | 🔄 **awaiting gate** |
+| 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ⬜                   |
+| 2     | Chat read/send + journal + quest visibility           | new ×2        | Low-Med      | ⬜                   |
+| 3     | Playlist control                                      | new           | Low          | ⬜                   |
+| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜                   |
+| 5     | Quest journal `replaceContent`                        | **shared**    | Med          | ⬜                   |
+| 6     | Promote → `master` + docs                             | —             | Low          | ⬜                   |
+| —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred          |
 
 Each phase ends at a working, testable state.
 **Me** = code + build + deploy. **You** = test in Foundry, report.
@@ -438,20 +438,61 @@ against the old fork build.
 - Verified separately: the backend survives both graceful and abrupt (RST) control-client
   disconnects, so probing it is safe.
 
-### Phase 1 — Combat tracker read 🎯 ⬜ (proven, re-port)
+### Phase 1 — Combat tracker read 🎯 🔄 (code done, deployed, awaiting gate)
 
 **Goal:** Re-land the one tool already proven on v14, and re-validate the 4-file pattern on v0.8.3.
 
-- [ ] Try `git cherry-pick 9f9cfcd` first. One commit's conflict is far more tractable than a merge;
-      fall back to hand-porting from `git show 9f9cfcd` if it fights.
-- [ ] Drop the doc-only hunks from that commit (the plan file is already carried in Phase R)
-- [ ] Confirm all four pieces landed: `combat.ts`, the `backend.ts` case, the `queries.ts` handler,
+- [x] ~~Try `git cherry-pick 9f9cfcd` first.~~ **Hand-ported instead — see below.**
+- [x] Drop the doc-only hunks from that commit (the plan file is already carried in Phase R)
+- [x] Confirm all four pieces landed: `combat.ts`, the `backend.ts` case, the `queries.ts` handler,
       and `getActiveCombat` in `data-access.ts`
-- [ ] Fold in the known follow-up: `getActiveCombat` returns `scene: null` when the combat is not
+- [x] Fold in the known follow-up: `getActiveCombat` returns `scene: null` when the combat is not
       bound to a scene. Add a `game.scenes.active?.name` fallback.
+- [x] Built, typechecked, bundled, deployed (both packages, matched pair). Control-port probe:
+      **44 tools** = 43 stock + `get-combat-tracker`.
 - [ ] **You:** read initiative order / current turn / round in a combat
 - **Gate:** round, current turn, init sorted highest-first, defeated/hidden/disposition all correct
   (this exact behaviour was confirmed on v0.8.2, so any difference is a v0.8.3 regression worth chasing).
+
+#### Why the cherry-pick was abandoned (do the same on every future re-port)
+
+`9f9cfcd` touches `data-access.ts` with **1073 changed lines**, but the tool itself is one method.
+The rest is a Prettier reformat of unrelated dnd5e helpers that rode along in that commit — onto a
+base upstream has **since reformatted differently**. Cherry-picking would have asked git to
+reconcile two independent reformats of the same thousand lines: the exact false-conflict scenario
+strategy decision 1 exists to avoid.
+
+`audit.py` settled it in one run, and this is the reusable test:
+
+```
+old methods: 120   new-only methods: 1
+--- MODIFIED upstream methods ---   addAttackToActor, addAuraToActor, createNpcActor, … (9, all formatting)
+--- NEW methods added by us ---     getActiveCombat
+```
+
+**Rule: audit the reference commit before cherry-picking it, not just the base.** If the audit shows
+new-only methods, hand-port those and ignore the diff's size. Result here: **90 insertions, 0
+deletions, no upstream line touched** — versus 1073 changed lines and a hand-resolved conflict.
+
+#### Scene fallback, as landed
+
+```ts
+scene: combat.scene?.name ?? (game.scenes as any)?.active?.name ?? null,
+```
+
+`combat.scene` is null for a combat not bound to a scene; the active scene is the sensible answer
+in that case, and `null` survives as the last resort.
+
+#### Notes for the gate
+
+- The tool is **GM-gated** in `queries.ts` (`validateGMAccess`), same as every other write-ish
+  query. Read it from a GM session.
+- **No combat active** is a legitimate result, not a failure: the tool returns
+  `{ active: false, message: 'No combat encounter is currently active.' }`.
+- A combat that exists but has not been **started** returns `active: false` with a
+  `"Combat is set up but not yet started"` message and the queued combatants. To exercise the
+  real gate criteria (round, current turn) the encounter must actually be started in Foundry.
+- Combatants with no initiative sort **last** and report `initiative: 'not rolled'`.
 
 ### Phase 1.5 — `request-player-rolls` repairs 🎲 ⬜ (re-port, all three missed by revision 3)
 
