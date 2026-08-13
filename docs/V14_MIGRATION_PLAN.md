@@ -544,7 +544,7 @@ in that case, and `null` survives as the last resort.
   real gate criteria (round, current turn) the encounter must actually be started in Foundry.
 - Combatants with no initiative sort **last** and report `initiative: 'not rolled'`.
 
-### Phase 1.5 — `request-player-rolls` repairs 🎲 ⬜ (re-port, all three missed by revision 3)
+### Phase 1.5 — `request-player-rolls` repairs 🎲 🔄 (code done, deployed, awaiting gate)
 
 **Goal:** Restore the three `request-player-rolls` fixes the port inventory forgot — rows 6, 7
 and 8. Not new work: all three have exact references on `master`.
@@ -572,24 +572,64 @@ and it lands in a live session.
 
 **Steps**
 
-- [ ] **Rider from Phase 1:** use `combat.turns` for turn order in `getActiveCombat`, falling back
+- [x] **Rider from Phase 1:** use `combat.turns` for turn order in `getActiveCombat`, falling back
       to the manual sort. Fixes tied-initiative ordering. Free here — same file, same deploy.
-- [ ] Re-graft `buildRollFormula` from `master` onto upstream's `data-access.ts` (row 6, 98 ln)
-- [ ] Re-graft the `requestPlayerRolls` speaker priority (row 7, 7 ln)
-- [ ] Re-graft the `attachRollButtonHandlers` speaker fallback (row 8, 1 ln)
-- [ ] Keep the `dnd5e` branch and `getSkillCode` untouched (upstream default path, carried per
+- [x] Re-graft `buildRollFormula` from `master` onto upstream's `data-access.ts` (row 6, 98 ln)
+- [x] Re-graft the `requestPlayerRolls` speaker priority (row 7, 7 ln)
+- [x] Re-graft the `attachRollButtonHandlers` speaker fallback (row 8, 1 ln)
+- [x] Keep the `dnd5e` branch and `getSkillCode` untouched (upstream default path, carried per
       strategy decision 3)
-- [ ] Confirm the Perception special case survives — it is the case that was actually observed
+- [x] Confirm the Perception special case survives — it is the case that was actually observed
       failing, and the easiest one to drop during a re-graft
-- [ ] Consider hoisting the modifier lookup to the server-side adapter instead of extending the
-      module-side `if (isPF2eFamily)` chain. **Decide before writing** — the module-side re-port is
-      the faithful, cheap option; the adapter route is architecturally correct and fixes future
-      systems for free, but changes the WS payload (matched-pair, both packages)
+- [x] Consider hoisting the modifier lookup to the server-side adapter instead of extending the
+      module-side `if (isPF2eFamily)` chain. **Decided 2026-08-12: module-side re-port.** See below.
+- [x] Built, typechecked, deployed. **Module-only** — server bundle and tool list unchanged, so no
+      backend restart and no Claude Desktop restart.
 - [ ] **You:** request a Perception skill check, an Athletics skill check, a Reflex save, and an
       initiative roll for a pf2e PC
 - **Gate:** each rolls with the character's real modifier. Cross-check against `get-character`,
   which already reports correct values (Amiri: athletics +7, acrobatics +5, intimidation +4).
 - **Note:** `rollType: 'custom'` already works and is the workaround until this lands.
+
+#### Decision: module-side re-port, not the adapter hoist (2026-08-12)
+
+Both routes were costed. **Module-side won**, on migration sequencing rather than architecture:
+
+|                 | Module-side re-port (chosen)        | Server-side adapter hoist        |
+| --------------- | ----------------------------------- | -------------------------------- |
+| Reference       | exact, on old `master`              | none — genuinely new work        |
+| Blast radius    | `data-access.ts` only               | WS payload → both packages       |
+| Fixes           | pf2e + sf2e                         | every system, present and future |
+| Strategy dec. 4 | satisfied ("nothing is re-derived") | **violated**                     |
+
+The hoist is the better end state — the pf2e adapter already computes correct modifiers
+server-side, so this is a routing problem, not a data problem. But it would have been the first
+phase to re-derive rather than re-port, with five phases of unported tools still ahead. Get the
+fork whole first, refactor from a known-good state. **Filed for after Phase 6.**
+
+Franklin scoped it explicitly: pf2e and sf2e only for now. mgt2e / wfrp4e / dsa5 / cosmere still
+fall through to the 5e path and still roll flat on skills. Not a regression, just not addressed.
+
+#### Deviation from a faithful port: `warnOnMissingModifier`
+
+The one thing added that is not on `master`. Every lookup in `buildRollFormula` ends in `?? 0`,
+which is exactly how this bug shipped unnoticed — a miss becomes a confident, correctly-labelled
+`1d20 + 0`. The helper logs a console warning on a pf2e/sf2e miss so the next one announces itself
+instead of costing a session. It cannot change a formula; it only observes.
+
+Agreed before writing. To revert to a byte-faithful port, delete the helper and its four call
+sites and restore `?? 0` inline.
+
+#### Watch for during the gate
+
+- **The `?? 0` fallback is still there** by design. A correct-looking `1d20 + 0` on a character
+  who genuinely has +0 is indistinguishable from a lookup miss **in the chat log** — the console
+  warning is the only thing that separates them. Check the browser console, not just chat.
+- **Initiative is the loosest lookup.** It cascades `attributes.initiative` → perception → dex mod
+  across three field names each. Most likely of the four to pick a plausible wrong number rather
+  than fail outright, so cross-check it hardest.
+- **Row 7 is visible, not numeric.** It changes who the roll _request_ appears to come from, not
+  any value. Confirm the request posts as the GM/`"GM"` actor rather than a bare user.
 
 ### Phase 2 — Chat + journal + quest visibility 💬📖 ⬜
 
