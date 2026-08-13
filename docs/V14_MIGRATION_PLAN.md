@@ -201,6 +201,50 @@ and is withdrawn. Their work is not lost: it is the reference material for Phase
    overwrite all three files — `backend.bundle.cjs`, `index.bundle.cjs`, **and** `index.cjs` —
    since Claude Desktop's config points at `index.cjs`.
 
+**Deploy verification without Claude Desktop** (use this every phase from now on)
+
+The backend's control port speaks newline-delimited JSON, so the deployed tool list can be read
+directly instead of inferred from the Claude Desktop UI:
+
+```js
+// node probe.cjs — connect 127.0.0.1:31414, write one line, read one line
+{ id: 'probe', method: 'list_tools', params: {} }
+```
+
+Phase R result: **43 tools**, `manage-actors` present, `get-combat-tracker` absent,
+`wfrp4e-add-items` present. That matches stock upstream v0.8.3 exactly (the 0.8.2 fork reported
+41: 40 stock + our combat tool). This is the authoritative freshness check — the Claude Desktop
+badge is not.
+
+#### ⚠️ Claude Desktop shows `failed` even when the deploy is healthy (pre-existing)
+
+Claude Desktop sometimes launches the stdio wrapper **twice, milliseconds apart**. With no backend
+listening, both wrappers race to spawn one. The loser's backend exits 0 on the lock check, and
+`index.ts` treats that as fatal for itself:
+
+```ts
+// packages/mcp-server/src/index.ts ~L170
+child.on('exit', code => {
+  if (code === 0) process.exit(0); // "likely lock failure", exits the wrapper too
+});
+```
+
+The surviving wrapper serves tools normally, but Claude Desktop reports the dead one as
+**"Server disconnected / failed"**. Not a Phase R regression — the same
+`backend exited cleanly (likely lock failure)` line appears in `wrapper.log` on 2026-08-11
+against the old fork build.
+
+- **Avoid it:** make sure a backend is already listening on 31414 _before_ starting Claude Desktop.
+  Both wrappers then just connect, neither spawns, and there is no race. This inverts the usual
+  advice — kill the backend before _copying_ files, but have one up before _launching_ the client.
+- **Diagnose it:** `%TEMP%\foundry-mcp-server\wrapper.log` (wrapper) and `mcp-server.log` (backend).
+- **Blind spot:** the wrapper spawns the backend with `stdio: ['ignore','ignore','pipe']` and then
+  never reads that pipe, so a backend crash writes its stack to a pipe nobody drains and leaves
+  **no trace in either log** — only `backend exited unexpectedly {"exitCode":1}`. To capture a
+  crash, start the backend by hand with stderr redirected to a file.
+- Verified separately: the backend survives both graceful and abrupt (RST) control-client
+  disconnects, so probing it is safe.
+
 ### Phase 1 — Combat tracker read 🎯 ⬜ (proven, re-port)
 
 **Goal:** Re-land the one tool already proven on v14, and re-validate the 4-file pattern on v0.8.3.
