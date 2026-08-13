@@ -246,12 +246,40 @@ messageMode… Deprecated since Version 14, backwards-compatible support will be
 Version 16."_ Source is `data-access.ts` ~L6046 (`await roll.toMessage(messageData, { create: true,
 rollMode })`). Upstream code, harmless today, breaks on v16. Console noise until fixed.
 
-#### Loose thread: `get-character` cannot find "Ezren"
+#### ✅ Resolved: `get-character` name lookup is exact-match, and PC actors carry a name suffix
 
-`get-character { identifier: 'Ezren' }` returns `Character not found: Ezren`, even though
-`get-current-scene` lists an Ezren token with a backing actor and `request-player-rolls` resolved
-the same name to an actor with a portrait and level. Two name-resolution paths disagree.
-Unexamined; may matter for Phase 2's speaker/portrait resolution.
+`get-character { identifier: 'Ezren' }` fails, but `{ identifier: 'Amiri (Level 1)' }` succeeds.
+**The actors in this world are literally named `"<Name> (Level 1)"`** — the suffix is part of
+`actor.name`, not something the bridge computes. `get-character` matches exactly;
+`request-player-rolls` matches loosely, which is why the same short name worked there. Not a bug,
+but callers must use the full actor name. Worth remembering for Phase 2 speaker resolution.
+
+#### The pf2e adapter already computes correct modifiers — on the wrong side of the wire
+
+Same probe, `get-character { identifier: 'Amiri (Level 1)' }`, returns exactly what the roll
+formula needs, keyed by **full pf2e slug**:
+
+```json
+"skills": {
+  "acrobatics":   { "modifier": 5, "rank": 1, "proficient": true },
+  "athletics":    { "modifier": 7, "rank": 1, "proficient": true },
+  "intimidation": { "modifier": 4, "rank": 1, "proficient": true },
+  "arcana":       { "modifier": 0, "rank": 0, "proficient": false }
+}
+```
+
+Two things follow. First, it confirms the diagnosis: pf2e keys skills by full slug, so the 5e
+three-letter codes (`prc`, `acr`, `ath`) cannot match. Second, **`perception` is absent from that
+map** — the alphabetical run goes `performance` → `religion` with no `perception` between them,
+confirming pf2e models Perception as a separate statistic rather than a skill. A slug fix alone
+would still miss Perception.
+
+So the correct modifier is already available server-side through the pf2e adapter, while the
+formula is built module-side from a 5e table. The fix is a routing problem, not a data problem.
+
+**Zero-code workaround, usable today:** `rollType: 'custom'` passes `rollTarget` through as a raw
+formula untouched (~L5822), so `{ rollType: 'custom', rollTarget: '1d20+7' }` rolls correctly.
+Every other roll type is wrong on pf2e.
 
 - **Heads-up:** the tool list grows (`manage-actors`, `wfrp4e-*`, mgt2e paths). Claude Desktop caches
   the tool list once per session, so kill the backend **before** copying (see Deploy reminder).
