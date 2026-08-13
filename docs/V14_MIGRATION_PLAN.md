@@ -110,16 +110,16 @@ Plus three **shared-file** behaviour changes with no new tool:
 
 Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 
-| Phase | Goal                                              | Files         | Risk         | Status        |
-| ----- | ------------------------------------------------- | ------------- | ------------ | ------------- |
-| **R** | **Re-fork onto upstream v0.8.3 + stock baseline** | —             | Low          | ⬜ **NEXT**   |
-| 1     | Combat tracker read (re-port)                     | new           | Low          | ⬜ (proven ★) |
-| 2     | Chat read/send + journal + quest visibility       | new ×2        | Low-Med      | ⬜            |
-| 3     | Playlist control                                  | new           | Low          | ⬜            |
-| 4     | Token distances + hidden tokens                   | **shared ×2** | **Med-High** | ⬜            |
-| 5     | Quest journal `replaceContent`                    | **shared**    | Med          | ⬜            |
-| 6     | Promote → `master` + docs                         | —             | Low          | ⬜            |
-| —     | sf2e adapter + sf2e index                         | sf2e          | —            | ⏭️ deferred   |
+| Phase | Goal                                              | Files         | Risk         | Status         |
+| ----- | ------------------------------------------------- | ------------- | ------------ | -------------- |
+| **R** | **Re-fork onto upstream v0.8.3 + stock baseline** | —             | Low          | 🔄 **at gate** |
+| 1     | Combat tracker read (re-port)                     | new           | Low          | ⬜ (proven ★)  |
+| 2     | Chat read/send + journal + quest visibility       | new ×2        | Low-Med      | ⬜             |
+| 3     | Playlist control                                  | new           | Low          | ⬜             |
+| 4     | Token distances + hidden tokens                   | **shared ×2** | **Med-High** | ⬜             |
+| 5     | Quest journal `replaceContent`                    | **shared**    | Med          | ⬜             |
+| 6     | Promote → `master` + docs                         | —             | Low          | ⬜             |
+| —     | sf2e adapter + sf2e index                         | sf2e          | —            | ⏭️ deferred    |
 
 Each phase ends at a working, testable state.
 **Me** = code + build + deploy. **You** = test in Foundry, report.
@@ -136,7 +136,7 @@ and is withdrawn. Their work is not lost: it is the reference material for Phase
 
 ---
 
-### Phase R — Re-fork onto upstream v0.8.3 🔱 ⬜ NEXT
+### Phase R — Re-fork onto upstream v0.8.3 🔱 🔄 AT GATE (awaiting Foundry test)
 
 **Goal:** Start from a clean upstream tip so every tool is ported onto one final base, exactly once.
 
@@ -163,19 +163,43 @@ and is withdrawn. Their work is not lost: it is the reference material for Phase
 
 **Steps**
 
-- [ ] `git checkout -b v14-port-v083 upstream/master` (keep `v14-port` intact as reference)
-- [ ] Carry fork context from `v14-port`: `CLAUDE.md`, `.claude/`, `docs/V14_MIGRATION_PLAN.md`
-      (mind the `Claude.md`/`CLAUDE.md` case-fold; remove upstream's tracked `Claude.md`)
-- [ ] `npm install` && `npx tsc --noEmit` && `npm run build` on stock v0.8.3, expect clean
-- [ ] Confirm version is 0.8.3 across all 5 manifests (upstream added a CI drift guard, keep lockstep)
-- [ ] Deploy **stock** module → `D:\FoundryData-Paizo\Data\modules\foundry-mcp-bridge`
-- [ ] Deploy **stock** server bundles (backup the current install first, as in the old Phase 0)
+- [x] `git checkout -b v14-port-v083 upstream/master` — branch cut at `8270992` (upstream tip
+      re-verified unchanged 2026-08-12). Upstream tracking unset so pushes can't reach upstream.
+- [x] Carry fork context from `v14-port`: `docs/V14_MIGRATION_PLAN.md` + `.claude/settings.local.json`
+      (commit `d10aa83`). `CLAUDE.md` is gitignored, so it survived the checkout on disk untouched.
+      **Case-fold note is stale:** upstream tracks no `Claude.md` at this tip, so there was nothing
+      to remove and no collision.
+- [x] `npm install` (up to date) && typecheck && `npm run build` && `npm run bundle:server` — all clean
+- [x] Version lockstep confirmed: `npm run version:check` → all 5 manifests at 0.8.3
+- [x] Deploy **stock** module → `D:\FoundryData-Paizo\Data\modules\foundry-mcp-bridge`
+      (67 files, hash-verified against the build; no orphaned files left in the destination)
+- [x] Deploy **stock** server bundles — backed up to `dist/_backup_fork_pre_v083/`
+      (`backend.bundle.cjs`, `index.bundle.cjs`, `index.cjs`)
 - [ ] **You:** restart Claude Desktop, then verify `get-current-scene` + a dice roll
 - **Gate:** stock v0.8.3 connects and works on Foundry v14. New known-good reference established.
 - **Heads-up:** the tool list grows (`manage-actors`, `wfrp4e-*`, mgt2e paths). Claude Desktop caches
   the tool list once per session, so kill the backend **before** copying (see Deploy reminder).
 - **Revert:** nothing destructive. `v14-port` and `master` are untouched; restore the installed
-  server from the backup folder and restart Claude Desktop.
+  server from `dist/_backup_fork_pre_v083/` and restart Claude Desktop.
+
+**Findings worth carrying forward**
+
+1. **`npx tsc --noEmit` at the repo root does not work on stock upstream.**
+   `packages/foundry-module/tsconfig.json` has no `"composite": true`, so the root config's
+   project references fail with `TS6306`. This is an upstream config defect, not ours.
+   **Use `npm run typecheck`** (per-workspace `tsc --noEmit`) instead — that is clean.
+   `CLAUDE.md` still documents the root command; treat this as the correction.
+2. **Clean `dist/` when switching between branches.** Stale output from the previous branch
+   produces a wall of `TS6305` ("output file has not been built from source file"). Delete
+   `packages/*/dist`, `shared/dist`, and `*.tsbuildinfo` before type-checking on a fresh branch.
+3. **`shared/dist` must exist before `packages/mcp-server` type-checks** — mcp-server resolves
+   `@foundry-mcp/shared` to the built output, not to source. Run `npm run build` before `typecheck`.
+4. **The install was a matched-pair violation before this phase.** The v14 world already had the
+   _stock 0.8.3 module_ deployed, while the installed server still ran the _fork_ bundle (it
+   contained `get-combat-tracker`). Phase R resolves it: both sides are now stock 0.8.3.
+5. **`index.cjs` is a byte copy of `index.bundle.cjs`**, not a launcher. Any server deploy must
+   overwrite all three files — `backend.bundle.cjs`, `index.bundle.cjs`, **and** `index.cjs` —
+   since Claude Desktop's config points at `index.cjs`.
 
 ### Phase 1 — Combat tracker read 🎯 ⬜ (proven, re-port)
 
