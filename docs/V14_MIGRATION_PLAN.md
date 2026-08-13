@@ -191,17 +191,17 @@ in that file is ours.
 
 Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 
-| Phase | Goal                                              | Files         | Risk         | Status                 |
-| ----- | ------------------------------------------------- | ------------- | ------------ | ---------------------- |
-| **R** | **Re-fork onto upstream v0.8.3 + stock baseline** | —             | Low          | ✅ **done**            |
-| 1     | Combat tracker read (re-port)                     | new           | Low          | ⬜ **NEXT** (proven ★) |
-| 1.5   | pf2e roll modifiers (re-port, **missed**)         | **shared**    | Low          | ⬜                     |
-| 2     | Chat read/send + journal + quest visibility       | new ×2        | Low-Med      | ⬜                     |
-| 3     | Playlist control                                  | new           | Low          | ⬜                     |
-| 4     | Token distances + hidden tokens                   | **shared ×2** | **Med-High** | ⬜                     |
-| 5     | Quest journal `replaceContent`                    | **shared**    | Med          | ⬜                     |
-| 6     | Promote → `master` + docs                         | —             | Low          | ⬜                     |
-| —     | sf2e adapter + sf2e index                         | sf2e          | —            | ⏭️ deferred            |
+| Phase | Goal                                                  | Files         | Risk         | Status                 |
+| ----- | ----------------------------------------------------- | ------------- | ------------ | ---------------------- |
+| **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done**            |
+| 1     | Combat tracker read (re-port)                         | new           | Low          | ⬜ **NEXT** (proven ★) |
+| 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ⬜                     |
+| 2     | Chat read/send + journal + quest visibility           | new ×2        | Low-Med      | ⬜                     |
+| 3     | Playlist control                                      | new           | Low          | ⬜                     |
+| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜                     |
+| 5     | Quest journal `replaceContent`                        | **shared**    | Med          | ⬜                     |
+| 6     | Promote → `master` + docs                             | —             | Low          | ⬜                     |
+| —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred            |
 
 Each phase ends at a working, testable state.
 **Me** = code + build + deploy. **You** = test in Foundry, report.
@@ -209,6 +209,13 @@ Each phase ends at a working, testable state.
 > **Ordering rationale:** cheap new-file phases (1, 2, 3) run before the risky shared-file phase (4).
 > Phase R is the de-risking event; banking easy wins right after confirms the new base is healthy
 > before we attack the phase budgeted for iteration.
+>
+> **Phase 1.5 breaks that ordering deliberately.** It is a shared-file phase jumped ahead of the
+> new-file ones because `request-player-rolls` is the only tool that is _present and silently
+> wrong_ rather than absent — it posts a confident, correctly-labelled check that rolls a bare
+> `1d20`. Everything else merely does not exist yet, which is safe. This one costs you at the
+> table. Its risk is low despite the shared file: three self-contained methods, exact references,
+> no upstream call sites change.
 
 ### Superseded phases (revision 1 and 2)
 
