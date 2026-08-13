@@ -7,7 +7,14 @@
 > This file is the source of truth for resuming after breaks. Update the **Status** column
 > as we complete each phase.
 >
-> _Revision 3, 2026-08-12. Verified against the repo._
+> _Revision 4, 2026-08-12. Port inventory rebuilt by method-level audit
+> ([`scripts/port-audit/`](../scripts/port-audit/)), not by reading commit messages._
+>
+> **What changed in revision 4:** Phase R is done. The shared-file inventory went from 3 entries
+> to 8; four were missing, one of which (`buildRollFormula`) had already shipped as a live
+> correctness bug and another (`extractTokenActorStats`) would have broken Phase 4. Phase 1.5 is
+> new. `2eb4d39` is confirmed redundant. The audit tooling is now in the repo so this is
+> repeatable on the next re-sync.
 
 ---
 
@@ -79,10 +86,15 @@ Module guard for optional-module tools: `game.modules.get('<id>')?.active` (in `
 
 ---
 
-## Port inventory (verified against old `master`)
+## Port inventory (rebuilt by method-level audit, revision 4)
 
 Ten tools, ten `data-access` methods, ten `queries.ts` handlers, ten `backend.ts` cases.
-**Zero tool-name collisions** with upstream's 43 tools (verified 2026-08-12).
+**Re-verified by audit 2026-08-12** — this half of the inventory was accurate. `backend.ts` adds
+exactly the ten `switch` cases plus four tool-class registrations; `queries.ts` adds exactly the
+ten matching handlers and modifies nothing upstream. **Zero tool-name collisions** with upstream's
+43 tools (confirmed live against the deployed v0.8.3 backend).
+
+The **shared-file** half was not accurate. See the next section.
 
 | Tool (MCP name)            | Server file                          | `data-access` method    | Phase | Reference diff |
 | -------------------------- | ------------------------------------ | ----------------------- | ----- | -------------- |
@@ -100,14 +112,73 @@ Ten tools, ten `data-access` methods, ten `queries.ts` handlers, ten `backend.ts
 ★ already written and **proven on Foundry v14**; re-port onto the new base, do not re-derive.
 ⚠️ needs the Simple Quest 5.x key fix, see Phase 2.
 
-Plus **four** **shared-file** behaviour changes with no new tool:
+### Shared-file in-place edits — rebuilt from the diff, revision 4
 
-| Change                                  | File                             | Size   | Phase |
-| --------------------------------------- | -------------------------------- | ------ | ----- |
-| Hidden tokens included in scene read    | `scene.ts` (shared)              | 6 ln   | 4     |
-| `get-token-details` full stat block     | `token-manipulation.ts` (shared) | 42 ln  | 4     |
-| `update-quest-journal` `replaceContent` | `quest-creation.ts` (shared)     | 33 ln  | 5     |
-| **pf2e/sf2e roll modifiers**            | **`data-access.ts` (shared)**    | 102 ln | 1.5   |
+Revisions 1-3 listed **three** of these from a reading of the commit messages. A method-level
+audit of `62cd3fb..master` found **eight edits across seven upstream methods**. Four were missing
+from the plan entirely. Every row below is verified absent from stock v0.8.3.
+
+| #   | Change                                | File · upstream method                                                  | Size      | Phase   | Rev 3?          |
+| --- | ------------------------------------- | ----------------------------------------------------------------------- | --------- | ------- | --------------- |
+| 1   | Hidden tokens in scene read (schema)  | `scene.ts` · `handleGetCurrentScene`                                    | 2 ln      | 4       | ✅              |
+| 2   | Hidden tokens default + description   | `scene.ts` · `getToolDefinitions`                                       | 4 ln      | 4       | ⚠️ undercounted |
+| 3   | Full stat block (server formatter)    | `token-manipulation.ts` · `formatTokenDetails`                          | 42 ln     | 4       | ✅              |
+| 4   | Full stat block (module extractor)    | `data-access.ts` · `getTokenDetails` + **new** `extractTokenActorStats` | 5 + 54 ln | 4       | ❌ **MISSING**  |
+| 5   | `update-quest-journal replaceContent` | `quest-creation.ts` · `handleUpdateQuestJournal`                        | 33 ln     | 5       | ✅              |
+| 6   | pf2e/sf2e roll modifiers              | `data-access.ts` · `buildRollFormula`                                   | 98 ln     | **1.5** | ❌ **MISSING**  |
+| 7   | Roll-request speaker (BUG-4)          | `data-access.ts` · `requestPlayerRolls`                                 | 7 ln      | **1.5** | ❌ **MISSING**  |
+| 8   | Roll-result speaker fallback          | `data-access.ts` · `attachRollButtonHandlers`                           | 1 ln      | **1.5** | ❌ **MISSING**  |
+
+> **⚠️ Row 4 would have broken Phase 4.** Revision 3 scheduled only the _server-side_ formatter
+> (row 3). Without the module-side extractor, `data-access.ts` never sends the stat data and
+> `formatTokenDetails` formats a payload that does not exist. The phase would have shipped,
+> tested as broken, and cost a debugging cycle to rediscover a piece we already had.
+
+**Rows 7 and 8 explained** (both found by the audit, both real bugs we had already fixed):
+
+```ts
+// 7 — requestPlayerRolls: game.user is a User, not an Actor, so the request had no real speaker
+-  speaker: ChatMessage.getSpeaker({ actor: game.user }),
++  const gmActor = (game.actors as any)?.getName('GM');   // 1) "GM" world actor
++  const requestSpeaker = gmActor ? ChatMessage.getSpeaker({ actor: gmActor })
++                                 : ChatMessage.getSpeaker(); // 2) selected token 3) Gamemaster
+// 8 — attachRollButtonHandlers: getSpeaker({actor: null}) misbehaves when no character resolved
+-  speaker: ChatMessage.getSpeaker({ actor: character }),
++  speaker: character ? ChatMessage.getSpeaker({ actor: character }) : { alias: rollLabel },
+```
+
+### How this inventory was rebuilt (repeat this on every future re-sync)
+
+Git cannot show TypeScript method names in hunk headers, so `git diff` hunks appear under bare
+`export class FoundryDataAccess {` and in-place edits hide inside 978 lines of additions. That is
+exactly how rows 4, 6, 7 and 8 were lost. Two scripts in [`scripts/port-audit/`](../scripts/port-audit/)
+solve it:
+
+```bash
+python scripts/port-audit/audit.py 62cd3fb master packages/foundry-module/src/data-access.ts
+python scripts/port-audit/mdiff.py 62cd3fb master <file> <method> [<method>...]
+```
+
+`audit.py` maps every hunk to its enclosing method in the **old** file and splits the result into
+_new methods_ (safe, portable as a block) versus _modified upstream methods_ (the ones that hide).
+`mdiff.py` then prints a single method's before/after by brace matching.
+
+**Rule: an inventory built from commit messages is not an inventory.** Run `audit.py` over every
+shared file and reconcile before trusting a phase list.
+
+### Verified redundant — do NOT port
+
+| Item                                       | Evidence                                                                                    |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `2eb4d39` preserve `effects[]` / `flags{}` | Both sides already in stock v0.8.3: `data-access.ts` L4994-4995 and `character.ts` L633-634 |
+
+### Confirmed sf2e-only — stays deferred
+
+`systems/sf2e/{adapter,filters,index-builder}.ts` (599 ln) · `data-access.ts` `buildSF2eIndex`,
+`extractSF2eDataFromPack`, `extractSF2eCreatureData`, the `buildEnhancedIndex` sf2e dispatch ·
+`types.ts` `SystemId` union + `SF2eCreatureIndex` · the `SF2eAdapter` registration in `backend.ts`.
+The audit confirms `types.ts::extractDataFromPack` is **identical** to upstream, so nothing else
+in that file is ours.
 
 > **Correction (revision 2, still current):** `journal.ts` is a single 221-line `JournalTools`
 > class holding four tools. Revision 1 split those across three phases, which was not portable.
@@ -375,10 +446,18 @@ against the old fork build.
 - **Gate:** round, current turn, init sorted highest-first, defeated/hidden/disposition all correct
   (this exact behaviour was confirmed on v0.8.2, so any difference is a v0.8.3 regression worth chasing).
 
-### Phase 1.5 — pf2e roll modifiers 🎲 ⬜ (re-port, missed by revision 3)
+### Phase 1.5 — `request-player-rolls` repairs 🎲 ⬜ (re-port, all three missed by revision 3)
 
-**Goal:** Restore the `request-player-rolls` modifier fix that the port inventory forgot.
-Not new work — a re-port with an exact reference, same as every other phase.
+**Goal:** Restore the three `request-player-rolls` fixes the port inventory forgot — rows 6, 7
+and 8. Not new work: all three have exact references on `master`.
+
+| Row | Method                     | Symptom on stock v0.8.3                                      |
+| --- | -------------------------- | ------------------------------------------------------------ |
+| 6   | `buildRollFormula`         | pf2e rolls have no modifier (`1d20 + 0`) — **observed live** |
+| 7   | `requestPlayerRolls`       | roll request speaker is a `User`, not an actor               |
+| 8   | `attachRollButtonHandlers` | no speaker at all when the character does not resolve        |
+
+They land together because they are one tool, one file, and one test cycle.
 
 **Why this is urgent despite being "just" a port:** every other missing tool is _absent_.
 This one is **present and silently wrong** — it posts a confident, correctly-labelled
@@ -395,7 +474,9 @@ and it lands in a live session.
 
 **Steps**
 
-- [ ] Re-graft `buildRollFormula` from `master` onto upstream's `data-access.ts`
+- [ ] Re-graft `buildRollFormula` from `master` onto upstream's `data-access.ts` (row 6, 98 ln)
+- [ ] Re-graft the `requestPlayerRolls` speaker priority (row 7, 7 ln)
+- [ ] Re-graft the `attachRollButtonHandlers` speaker fallback (row 8, 1 ln)
 - [ ] Keep the `dnd5e` branch and `getSkillCode` untouched (upstream default path, carried per
       strategy decision 3)
 - [ ] Confirm the Perception special case survives — it is the case that was actually observed
@@ -462,14 +543,22 @@ and can be dropped in any 5.x patch.
 
 ### Phase 4 — Token distances + hidden tokens 📐 ⬜
 
-**Goal:** First shared-file re-graft, and the highest v14 API-breakage risk (canvas/grid `measurePath`).
+**Goal:** Second shared-file re-graft, and the highest v14 API-breakage risk (canvas/grid `measurePath`).
 
-- [ ] Re-graft onto upstream's `token-manipulation.ts`: `get-token-distances` (new tool) and the
-      `get-token-details` full stat-block extension (42 ln)
-- [ ] Re-graft onto upstream's `scene.ts`: include hidden tokens in `get-current-scene` (6 ln)
+> **⚠️ Rescoped in revision 4.** The stat block is **two-sided** and revision 3 listed only the
+> server half. Porting row 3 without row 4 ships a formatter for a payload the module never sends.
+
+- [ ] `token-manipulation.ts`: `get-token-distances` (new tool) + `formatTokenDetails` stat-block
+      extension (row 3, 42 ln)
+- [ ] **`data-access.ts`: `getTokenDetails` → `this.extractTokenActorStats(token.actor)` and the
+      new `extractTokenActorStats` helper (row 4, 5 + 54 ln).** Without this, row 3 has no data.
+- [ ] `scene.ts`: hidden tokens — **two places**, `handleGetCurrentScene`'s zod default (row 1)
+      and `getToolDefinitions`' `includeHidden` default + description (row 2). Both flip
+      `false` → `true`; changing only one leaves the tool and its schema disagreeing.
 - [ ] Check interaction with upstream's `8546b0f` synthetic-token-actor resolution
-- [ ] **You:** confirm hidden tokens appear in `get-current-scene`; request token distances
-- **Gate:** distances correct in feet; hidden tokens visible to GM.
+- [ ] **You:** confirm hidden tokens appear in `get-current-scene`; request token distances;
+      confirm `get-token-details` returns a full stat block, not just name/type/img
+- **Gate:** distances correct in feet; hidden tokens visible to GM; stat block populated.
 - **Risk:** budget 1-2 fix cycles here specifically. This is the phase most likely to need iteration,
   and the estimate is a guess, not a measurement.
 
