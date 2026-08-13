@@ -55,9 +55,18 @@ lineage, stock+stock or ours+ours. Never mix our server with a stock module or v
     `SF2eCreatureIndex` in `data-access.ts`
   - Made redundant for pf2e by upstream's pf2e adapter + pf2e creature index.
 - **System-agnostic (PORT THESE):** combat read, chat read/send, token distances, hidden-token
-  visibility, playlist control, journal/handout display, Simple Quest integration.
+  visibility, playlist control, journal/handout display, Simple Quest integration,
+  **roll modifiers**.
   Roll-modifier and stat-block code mentions sf2e only inside shared `pf2e || sf2e` branches,
-  and pf2e is the primary path, so it works as-is.
+  and pf2e is the primary path, so **neither needs an sf2e-specific rewrite**.
+
+  > **⚠️ Correction (revision 4, 2026-08-12).** Revision 3 ended that sentence with "so it works
+  > as-is", which was read as _"needs no action"_. Wrong on both counts. "Works as-is" only meant
+  > the code needs no sf2e-specific rewrite — it still has to be **ported**, because we re-forked
+  > onto stock upstream in Phase R and stock upstream never had our fix.
+  > The stat-block half was scheduled anyway (Phase 4, 42 ln); the **roll-modifier half was
+  > scheduled nowhere** and fell out of the plan entirely. Proven live on 2026-08-12: a pf2e
+  > Perception check rolled `1d20 + 0`. Now scheduled as **Phase 1.5**.
 
 ### The "4-file pattern" (every ported tool touches these)
 
@@ -93,11 +102,12 @@ Ten tools, ten `data-access` methods, ten `queries.ts` handlers, ten `backend.ts
 
 Plus three **shared-file** behaviour changes with no new tool:
 
-| Change                                  | File                             | Size  | Phase |
-| --------------------------------------- | -------------------------------- | ----- | ----- |
-| Hidden tokens included in scene read    | `scene.ts` (shared)              | 6 ln  | 4     |
-| `get-token-details` full stat block     | `token-manipulation.ts` (shared) | 42 ln | 4     |
-| `update-quest-journal` `replaceContent` | `quest-creation.ts` (shared)     | 33 ln | 5     |
+| Change                                  | File                             | Size   | Phase |
+| --------------------------------------- | -------------------------------- | ------ | ----- |
+| Hidden tokens included in scene read    | `scene.ts` (shared)              | 6 ln   | 4     |
+| `get-token-details` full stat block     | `token-manipulation.ts` (shared) | 42 ln  | 4     |
+| `update-quest-journal` `replaceContent` | `quest-creation.ts` (shared)     | 33 ln  | 5     |
+| **pf2e/sf2e roll modifiers**            | **`data-access.ts` (shared)**    | 102 ln | 1.5   |
 
 > **Correction (revision 2, still current):** `journal.ts` is a single 221-line `JournalTools`
 > class holding four tools. Revision 1 split those across three phases, which was not portable.
@@ -114,6 +124,7 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | ----- | ------------------------------------------------- | ------------- | ------------ | ---------------------- |
 | **R** | **Re-fork onto upstream v0.8.3 + stock baseline** | —             | Low          | ✅ **done**            |
 | 1     | Combat tracker read (re-port)                     | new           | Low          | ⬜ **NEXT** (proven ★) |
+| 1.5   | pf2e roll modifiers (re-port, **missed**)         | **shared**    | Low          | ⬜                     |
 | 2     | Chat read/send + journal + quest visibility       | new ×2        | Low-Med      | ⬜                     |
 | 3     | Playlist control                                  | new           | Low          | ⬜                     |
 | 4     | Token distances + hidden tokens                   | **shared ×2** | **Med-High** | ⬜                     |
@@ -235,9 +246,9 @@ replay that same precomputed string, so `(GM Override)` in the flavor text is ir
   Its **absence** from the browser console confirms the skill-map cause.
 - Weak evidence for the skill-map cause already: the chat message carried Ezren's portrait,
   speaker, and level, so `playerInfo.character` was populated.
-- **Fix shape (not yet scheduled):** route the modifier through the system adapter instead of the
-  5e table, or read pf2e's statistics directly. This is a `data-access.ts` shared-file change and
-  deserves its own phase — do not fold it into a port.
+- **This is a re-port, not new work — scheduled as Phase 1.5.** We already fixed this on old
+  `master` (`0fdbfcf` + `fad49c3`), including the pf2e Perception case. It regressed only because
+  Phase R re-forked onto stock upstream, and the port inventory never listed it. See Phase 1.5.
 
 #### ⚠️ v14 deprecation: `Roll#toMessage` `rollMode` → `messageMode`
 
@@ -363,6 +374,41 @@ against the old fork build.
 - [ ] **You:** read initiative order / current turn / round in a combat
 - **Gate:** round, current turn, init sorted highest-first, defeated/hidden/disposition all correct
   (this exact behaviour was confirmed on v0.8.2, so any difference is a v0.8.3 regression worth chasing).
+
+### Phase 1.5 — pf2e roll modifiers 🎲 ⬜ (re-port, missed by revision 3)
+
+**Goal:** Restore the `request-player-rolls` modifier fix that the port inventory forgot.
+Not new work — a re-port with an exact reference, same as every other phase.
+
+**Why this is urgent despite being "just" a port:** every other missing tool is _absent_.
+This one is **present and silently wrong** — it posts a confident, correctly-labelled
+"Perception Skill Check" that rolls a bare `1d20`. Wrong-but-confident is worse than missing,
+and it lands in a live session.
+
+**Reference:** `buildRollFormula` in `master:packages/foundry-module/src/data-access.ts` (~L4634,
+102 lines). Built across two commits — take the **final `master` state**, not either commit alone:
+
+| Commit    | Added                                                                                         |
+| --------- | --------------------------------------------------------------------------------------------- |
+| `0fdbfcf` | `isPF2eFamily` branches for `skill` / `save` / `initiative`                                   |
+| `fad49c3` | the pf2e Perception special case (`system.perception`, since pf2e has no `skills.perception`) |
+
+**Steps**
+
+- [ ] Re-graft `buildRollFormula` from `master` onto upstream's `data-access.ts`
+- [ ] Keep the `dnd5e` branch and `getSkillCode` untouched (upstream default path, carried per
+      strategy decision 3)
+- [ ] Confirm the Perception special case survives — it is the case that was actually observed
+      failing, and the easiest one to drop during a re-graft
+- [ ] Consider hoisting the modifier lookup to the server-side adapter instead of extending the
+      module-side `if (isPF2eFamily)` chain. **Decide before writing** — the module-side re-port is
+      the faithful, cheap option; the adapter route is architecturally correct and fixes future
+      systems for free, but changes the WS payload (matched-pair, both packages)
+- [ ] **You:** request a Perception skill check, an Athletics skill check, a Reflex save, and an
+      initiative roll for a pf2e PC
+- **Gate:** each rolls with the character's real modifier. Cross-check against `get-character`,
+  which already reports correct values (Amiri: athletics +7, acrobatics +5, intimidation +4).
+- **Note:** `rollType: 'custom'` already works and is the workaround until this lands.
 
 ### Phase 2 — Chat + journal + quest visibility 💬📖 ⬜
 
