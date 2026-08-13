@@ -110,16 +110,16 @@ Plus three **shared-file** behaviour changes with no new tool:
 
 Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 
-| Phase | Goal                                              | Files         | Risk         | Status         |
-| ----- | ------------------------------------------------- | ------------- | ------------ | -------------- |
-| **R** | **Re-fork onto upstream v0.8.3 + stock baseline** | —             | Low          | 🔄 **at gate** |
-| 1     | Combat tracker read (re-port)                     | new           | Low          | ⬜ (proven ★)  |
-| 2     | Chat read/send + journal + quest visibility       | new ×2        | Low-Med      | ⬜             |
-| 3     | Playlist control                                  | new           | Low          | ⬜             |
-| 4     | Token distances + hidden tokens                   | **shared ×2** | **Med-High** | ⬜             |
-| 5     | Quest journal `replaceContent`                    | **shared**    | Med          | ⬜             |
-| 6     | Promote → `master` + docs                         | —             | Low          | ⬜             |
-| —     | sf2e adapter + sf2e index                         | sf2e          | —            | ⏭️ deferred    |
+| Phase | Goal                                              | Files         | Risk         | Status                 |
+| ----- | ------------------------------------------------- | ------------- | ------------ | ---------------------- |
+| **R** | **Re-fork onto upstream v0.8.3 + stock baseline** | —             | Low          | ✅ **done**            |
+| 1     | Combat tracker read (re-port)                     | new           | Low          | ⬜ **NEXT** (proven ★) |
+| 2     | Chat read/send + journal + quest visibility       | new ×2        | Low-Med      | ⬜                     |
+| 3     | Playlist control                                  | new           | Low          | ⬜                     |
+| 4     | Token distances + hidden tokens                   | **shared ×2** | **Med-High** | ⬜                     |
+| 5     | Quest journal `replaceContent`                    | **shared**    | Med          | ⬜                     |
+| 6     | Promote → `master` + docs                         | —             | Low          | ⬜                     |
+| —     | sf2e adapter + sf2e index                         | sf2e          | —            | ⏭️ deferred            |
 
 Each phase ends at a working, testable state.
 **Me** = code + build + deploy. **You** = test in Foundry, report.
@@ -136,7 +136,7 @@ and is withdrawn. Their work is not lost: it is the reference material for Phase
 
 ---
 
-### Phase R — Re-fork onto upstream v0.8.3 🔱 🔄 AT GATE (awaiting Foundry test)
+### Phase R — Re-fork onto upstream v0.8.3 🔱 ✅ DONE (gate passed 2026-08-12)
 
 **Goal:** Start from a clean upstream tip so every tool is ported onto one final base, exactly once.
 
@@ -195,7 +195,63 @@ and is withdrawn. Their work is not lost: it is the reference material for Phase
 | ----------------------------------- | ---------------------------------------------------------------------- |
 | Tool list freshness                 | ✅ 43 tools, `manage-actors` in, `get-combat-tracker` out              |
 | `get-current-scene` (read path)     | ✅ scene "Landing", 5 tokens, dispositions correct, `withoutActors: 0` |
-| `request-player-rolls` (write path) | ⬜ pending                                                             |
+| `request-player-rolls` (write path) | ✅ button posted, click handled, roll evaluated, message created       |
+| Roll **modifier** correctness       | ❌ rolled `1d20 + 0` — see below                                       |
+
+**Gate verdict: PASS.** Both paths work on Foundry v14. The modifier defect below is a
+pre-existing upstream bug, not a Phase R regression, and does not block the baseline.
+
+#### ❌ `request-player-rolls` applies no modifier on pf2e — "moot after the pivot" was WRONG
+
+Observed 2026-08-12: a Perception skill check for Ezren (level 1) rolled **`1d20 + 0`**.
+
+`CLAUDE.md` lists this under _Moot after the pf2e pivot_, reasoning that "upstream's pf2e adapter
+handles this correctly." **That reasoning does not hold.** The roll formula is built
+**module-side** in `data-access.ts`, which never consults the server-side pf2e adapter in
+`packages/mcp-server/src/systems/pf2e/`. The adapter is not in this code path at all.
+
+`buildRollFormula` (`data-access.ts` ~L5782) is hardcoded to **D&D 5e**:
+
+```ts
+case 'skill':
+  const skillCode = this.getSkillCode(rollTarget); // 'perception' -> 'prc' (5e 3-letter code)
+  const skillMod = rollData.skills?.[skillCode]?.total ?? 0; // pf2e has no skills.prc -> undefined
+  baseFormula = `1d20+${skillMod}`; // -> 1d20+0
+```
+
+`getSkillCode` (~L5848) maps only the 18 D&D 5e skills to 5e three-letter codes. On pf2e the
+lookup cannot hit: pf2e keys skills by full slug, and **Perception is not a skill in pf2e at all**
+— it is a top-level statistic. The `?? 0` then swallows the miss silently. Every `ability`,
+`skill`, `save`, and `initiative` roll is affected; only `custom` (raw formula passthrough) escapes.
+
+**Not a GM-override artifact.** The formula is baked into the button's `data-roll-formula`
+attribute when the request is created (~L5527), before anyone clicks. GM and player clicks both
+replay that same precomputed string, so `(GM Override)` in the flavor text is irrelevant here.
+
+- **One check still discriminates two causes.** Either the character resolved and the 5e skill
+  lookup missed (expected), or the character never resolved and the `else` branch at ~L5829 kept
+  the bare `1d20`. That branch logs
+  `[foundry-mcp-bridge] No character provided for roll formula, using base 1d20`.
+  Its **absence** from the browser console confirms the skill-map cause.
+- Weak evidence for the skill-map cause already: the chat message carried Ezren's portrait,
+  speaker, and level, so `playerInfo.character` was populated.
+- **Fix shape (not yet scheduled):** route the modifier through the system adapter instead of the
+  5e table, or read pf2e's statistics directly. This is a `data-access.ts` shared-file change and
+  deserves its own phase — do not fold it into a port.
+
+#### ⚠️ v14 deprecation: `Roll#toMessage` `rollMode` → `messageMode`
+
+Foundry v14 logs on every roll: _"The rollMode option of Roll#toMessage is deprecated in favor of
+messageMode… Deprecated since Version 14, backwards-compatible support will be removed in
+Version 16."_ Source is `data-access.ts` ~L6046 (`await roll.toMessage(messageData, { create: true,
+rollMode })`). Upstream code, harmless today, breaks on v16. Console noise until fixed.
+
+#### Loose thread: `get-character` cannot find "Ezren"
+
+`get-character { identifier: 'Ezren' }` returns `Character not found: Ezren`, even though
+`get-current-scene` lists an Ezren token with a backing actor and `request-player-rolls` resolved
+the same name to an actor with a portrait and level. Two name-resolution paths disagree.
+Unexamined; may matter for Phase 2's speaker/portrait resolution.
 
 - **Heads-up:** the tool list grows (`manage-actors`, `wfrp4e-*`, mgt2e paths). Claude Desktop caches
   the tool list once per session, so kill the backend **before** copying (see Deploy reminder).
