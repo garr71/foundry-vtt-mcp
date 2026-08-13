@@ -10,12 +10,15 @@
 > _Revision 5, 2026-08-13. Port inventory rebuilt by method-level audit
 > ([`scripts/port-audit/`](../scripts/port-audit/)), not by reading commit messages._
 >
-> **What changed in revision 5:** Phase 2 is code-complete and awaiting its gate. It is the first
-> phase where a **faithful** re-port would have shipped broken code: `getRecentChat` reads the
-> `ChatMessage` document directly, and v14 removed `ChatMessage#user` with no deprecation shim.
-> Caught by reading the installed v14 client source, whose location is now recorded in Phase 2.
-> The standing "verify against the installed module" rule is generalised to core Foundry.
-> Stale Phase 2 → Phase 7a cross-references cleaned up after the 2026-08-13 rescope.
+> **What changed in revision 5:** Phase 2 is done and gate-passed. It is the first phase where a
+> **faithful** re-port would have shipped broken code: `getRecentChat` reads the `ChatMessage`
+> document directly, and v14 removed `ChatMessage#user` with no deprecation shim. Caught by reading
+> the installed v14 client source, whose location is now recorded in Phase 2. The standing "verify
+> against the installed module" rule is generalised to core Foundry. The gate also produced a
+> second rule the hard way — the designed fixture could not discriminate, because the server-side
+> formatter re-merged the two fields it was built to separate; **check the whole path from source
+> field to printed output before trusting a fixture.** Stale Phase 2 → Phase 7a cross-references
+> cleaned up after the 2026-08-13 rescope.
 >
 > **What changed in revision 4:** Phase R is done. The shared-file inventory went from 3 entries
 > to 8; four were missing, one of which (`buildRollFormula`) had already shipped as a live
@@ -244,8 +247,8 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | **R** | **Re-fork onto upstream v0.8.3 + stock baseline**     | —             | Low          | ✅ **done**  |
 | 1     | Combat tracker read (re-port)                         | new           | Low          | ✅ **done**  |
 | 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ✅ **done**  |
-| 2     | Chat read/send + journal display                      | new ×2        | Low          | 🔄 **gate**  |
-| 3     | Playlist control                                      | new           | Low          | ⬜           |
+| 2     | Chat read/send + journal display                      | new ×2        | Low          | ✅ **done**  |
+| 3     | Playlist control                                      | new           | Low          | ⬜ **NEXT**  |
 | 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜           |
 | 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ⬜           |
 | 6     | Promote → `master` + docs                             | —             | Low          | ⬜           |
@@ -739,7 +742,7 @@ sites and restore `?? 0` inline.
 - **Row 7 is visible, not numeric.** It changes who the roll _request_ appears to come from, not
   any value. Confirm the request posts as the GM/`"GM"` actor rather than a bare user.
 
-### Phase 2 — Chat + journal display 💬📖 ⬜ (rescoped 2026-08-13)
+### Phase 2 — Chat + journal display 💬📖 ✅ DONE (gate passed 2026-08-13)
 
 **Goal:** Three tools, two brand-new files, zero shared-file risk, **zero external-module
 dependency**. Highest per-session value left.
@@ -758,12 +761,101 @@ dependency**. Highest per-session value left.
       Diff is **284 insertions, 0 deletions** — no upstream line touched, same shape as Phase 1.
       Control-port probe: **47 tools** = 43 stock + `get-combat-tracker` + the 3 new ones,
       with both Simple Quest tools confirmed absent.
-- [ ] **You:** read recent rolls/messages; have Claude post to chat; show a handout page to players
+- [x] **You:** read recent rolls/messages; have Claude post to chat; show a handout page to players
 - **Gate:** rolls readable; messages post with correct speaker + portrait; correct journal page
   displays to players.
 - **Note:** speaker resolution has a known wrinkle from the Phase 1.5 gate — a target name resolves
   to the owning _player_ when one is active and to the _character_ otherwise. Expect the same split
   here, and do not read it as a bug.
+
+**Phase 2 gate results (2026-08-13)** — 20-message read, three posts, one journal page.
+
+| Check | Result                                                                        |
+| ----- | ----------------------------------------------------------------------------- |
+| 1     | ✅ 20 messages, 8 rolls; formula/total/speaker populated on every roll        |
+| 2     | ✅ `author` correct — zero empty/blank/`"Unknown"` across all 20 (see below)  |
+| 3a    | ✅ posts as GM, public                                                        |
+| 3b    | ✅ resolves the actor **via its token** — portrait present                    |
+| 3c    | ✅ whisper scoped correctly; player client could not see it                   |
+| 4     | ✅ correct page, single-page mode, on the GM client (player side unexercised) |
+
+**Gate verdict: PASS.**
+
+#### ⚠️ The designed fixture could not discriminate — the formatter flattened it
+
+The gate was built around an OOC message, on the reasoning that Foundry does `delete chatData.speaker`
+for OOC (`chat.mjs` `#processChatCommand`), so `author` and `speaker` must differ. Foundry does
+exactly that. **The tool output still showed them identical**, because the server-side formatter
+substitutes the author when no speaker survives ([`chat.ts`](../packages/mcp-server/src/tools/chat.ts)):
+
+```ts
+speaker: msg.speaker?.alias ?? msg.speaker?.actor ?? msg.author,
+```
+
+So the one message shape guaranteed to have no speaker is also the one shape where the output layer
+guarantees the two fields read the same. The fixture proved nothing.
+
+**What actually proved it** was two unplanned messages in the same batch, spotted during the gate:
+
+```
+"author": "Dragor",  "speaker": "Dice So Nice!"
+"author": "Dragor",  "speaker": "Amiri (Level 1)"
+```
+
+Under the removed v13 path `author` could only ever echo the speaker, so it would have read
+`"Dice So Nice!"` and `"Amiri (Level 1)"`. A real User name appearing **nowhere** in the speaker
+field cannot be produced by a `speaker.alias` fallback. Row 1 is confirmed landed.
+
+> **The lesson recurred inside the test written to catch it.** "A silent `?? default` makes results
+> unverifiable from the outside" is already a standing rule here (Phase 1.5). This time the silent
+> fallback was in the **formatter**, and it defeated the gate rather than the feature.
+> **Rule: check the whole path from source field to printed output before trusting a fixture.**
+> A discriminating input is not a discriminating test if something downstream re-merges the fields.
+>
+> Follow-on, filed to 7d, not fixed here: that same `?? msg.author` means `read-chat`'s `speaker`
+> can never be distinguished from "no speaker, showing author instead". Faithful to `master`, mildly
+> dishonest as a field.
+
+#### `1d20 + 0` in the log is a Phase R fossil (probable, unconfirmed)
+
+Check 1 returned a `1d20 + 0` for Ezren. That matches the Phase R gate record exactly — _"a Perception
+skill check for Ezren (level 1) rolled `1d20 + 0`"_ — and the same 20-message window still holds
+Amiri's `+5`/`+7` from the Phase 1.5 gate, so the window demonstrably spans both. Chat history
+survives deploys. **Not re-rolled during this gate, so this remains inference, not proof.** One
+Perception request for Ezren settles it; do that before reading any future `+0` as a regression.
+
+#### 3b resolved through the token path — the better branch
+
+The tool echoed `"Amiri"` while the actor is named `"Amiri (Level 1)"`, which reads like a failed
+partial match. It is not: `"amiri (level 1)".includes("amiri")` cannot fail. `sendChatMessage`
+prefers a token on the current scene and `getSpeaker({token, actor})` takes its alias from the
+**token name**, so `"Amiri"` is the token's name. Check 1 corroborates — both forms appear as roll
+speakers in the same log. That branch is the one that yields the token portrait, and the portrait
+was present.
+
+**Reading note:** a returned speaker that differs from the actor name is expected and good. The
+failure signature is a bare alias **with no portrait**, not the string itself.
+
+#### Correction to this plan's own gate criteria: the TOC sidebar is not a mode tell
+
+The gate listed "opens in multi-page mode with the sidebar TOC" as a failure sign. Wrong —
+`journal-sheet.mjs` `getData()` builds `context.toc` (the page list) in **both** modes and varies
+only `context.pages`: SINGLE renders `[toc[pageIndex]]`, MULTIPLE renders all of `toc`. The sidebar
+is always present.
+
+**The real tell is the content pane:** one page rendered = SINGLE, all pages in a continuous scroll
+= MULTIPLE. Observed: one page, correct page highlighted in the TOC. Correct behaviour.
+
+#### Landed but unexercised: the player-side render (third time this pattern appears)
+
+No player client was connected for check 4, so only the GM render is proven. Risk is low — both
+sides run the same `Journal._showEntry`, players via the socket listener and the GM directly in the
+ack callback, and `force: true` grants the temp OBSERVER that stops `!force && !entry.visible` from
+bailing. But it is inferred, not observed.
+
+Third phase running to ship one of these (Phase 1's scene fallback, Phase 1.5's row 8, now this).
+**A passing happy path does not test the branch it did not take** — the pattern is consistent
+enough that it belongs on the pre-gate checklist, not in a post-mortem each time.
 
 #### ⚠️ The port source was v13 code — `getRecentChat` needed three v14 corrections
 
@@ -960,6 +1052,10 @@ strategy-decision-4 reason:
 - [ ] **`get-character` never reports initiative** — upstream pf2e adapter gap found in the Phase
       1.5 gate; leaves initiative with no server-side cross-check
 - [ ] **`Roll#toMessage` `rollMode` → `messageMode`** — v14 deprecation, breaks on v16
+- [ ] **`read-chat`'s `speaker` hides "no speaker"** — the formatter's `?? msg.author` makes a
+      message with no speaker indistinguishable from one spoken by its author. Faithful to `master`,
+      but it defeated the Phase 2 gate fixture. Emit the speaker as nullable and let the caller
+      decide, rather than silently substituting.
 
 ---
 
