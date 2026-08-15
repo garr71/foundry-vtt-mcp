@@ -7,8 +7,26 @@
 > This file is the source of truth for resuming after breaks. Update the **Status** column
 > as we complete each phase.
 >
-> _Revision 5, 2026-08-13. Port inventory rebuilt by method-level audit
+> _Revision 7, 2026-08-15. Port inventory rebuilt by method-level audit
 > ([`scripts/port-audit/`](../scripts/port-audit/)), not by reading commit messages._
+>
+> **What changed in revision 7 (2026-08-15):** Phase 4 **gate PASSED**, with **zero fix cycles on
+> the ported code** against a Med-High budget of one to two. The only thing that blocked the gate
+> was an unrelated pre-existing crash: the backend's control channel never attached an `error`
+> listener to its connection sockets, so an abruptly-killed Claude Desktop wrapper took the whole
+> process down. Fixed, and **verified by reproducing the RST rather than by assuming**. That also
+> falsified a Phase R note and showed the Phase R mitigation does not prevent it. The gate itself
+> produced the best fixture in the project so far — a diagonal distance where three candidate
+> algorithms give three different numbers — and resolved its own "cannot determine" on `level`
+> via `??` semantics.
+>
+> **What changed in revision 6:** Phase 4 is deployed and awaiting its gate. The phase was budgeted
+> **Med-High almost entirely on `grid.measurePath`**, and reading the v14 source first showed the API
+> is intact — the risk was retired before a line was written, which is the whole point of the Phase 2
+> rule. What the same check _did_ find was the recurring failure mode a fourth time:
+> `Actor#statuses` is a `Set`, which JSON-serialises to `{}`, so the ported `conditions` field would
+> have been empty on every token forever. That one was broken on `master` too, not v14 drift.
+> All three surfaces shipped in one deploy, setting aside the one-tool cadence deliberately.
 >
 > **What changed in revision 5:** Phase 2 is done and gate-passed. It is the first phase where a
 > **faithful** re-port would have shipped broken code: `getRecentChat` reads the `ChatMessage`
@@ -249,7 +267,7 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | 1.5   | `request-player-rolls` repairs (rows 6-8, **missed**) | **shared**    | Low          | ✅ **done**  |
 | 2     | Chat read/send + journal display                      | new ×2        | Low          | ✅ **done**  |
 | 3     | Playlist control                                      | new           | Low          | ✅ **done**  |
-| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ⬜ **NEXT**  |
+| 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ✅ **done**  |
 | 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ⬜           |
 | 6     | Promote → `master` + docs                             | —             | Low          | ⬜           |
 | 7     | **Module-dependent** re-integration + enhancements    | new           | Med          | ⬜ _after 6_ |
@@ -487,8 +505,11 @@ against the old fork build.
   never reads that pipe, so a backend crash writes its stack to a pipe nobody drains and leaves
   **no trace in either log** — only `backend exited unexpectedly {"exitCode":1}`. To capture a
   crash, start the backend by hand with stderr redirected to a file.
-- Verified separately: the backend survives both graceful and abrupt (RST) control-client
-  disconnects, so probing it is safe.
+- ~~Verified separately: the backend survives both graceful and abrupt (RST) control-client
+  disconnects, so probing it is safe.~~ **FALSIFIED 2026-08-15 — see "Backend dies on an abrupt
+  control-client disconnect" in Phase 4.** A _graceful_ disconnect is survivable; an **abrupt one
+  crashes the process**. Probing remains safe because the probe script closes cleanly with
+  `socket.end()`, but the general claim was too broad.
 
 ### Phase 1 — Combat tracker read 🎯 ✅ DONE (gate passed 2026-08-12)
 
@@ -1076,26 +1097,281 @@ merely imperfect.** Rows 1-3 were forced; this is a presentation choice with a r
 - Expect the reported volume percentage to disagree with Foundry's slider. See above — that is the
   known carried item, not a Phase 3 failure.
 
-### Phase 4 — Token distances + hidden tokens 📐 ⬜
+### Phase 4 — Token distances + hidden tokens 📐 ✅ DONE (gate passed 2026-08-15)
 
 **Goal:** Second shared-file re-graft, and the highest v14 API-breakage risk (canvas/grid `measurePath`).
 
 > **⚠️ Rescoped in revision 4.** The stat block is **two-sided** and revision 3 listed only the
 > server half. Porting row 3 without row 4 ships a formatter for a payload the module never sends.
 
-- [ ] `token-manipulation.ts`: `get-token-distances` (new tool) + `formatTokenDetails` stat-block
+> **Deployed as one cycle**, all three surfaces together, on Franklin's call 2026-08-13. The
+> `CLAUDE.md` one-tool cadence was set aside deliberately: the three changes share no code path,
+> each gate check is a single tool call, and the phase's headline risk (`measurePath`) was
+> **de-risked by reading the v14 source before writing**, so the "1-2 fix cycles" budget below
+> was likely pessimistic. Verify that against the gate before generalising it.
+
+- [x] `token-manipulation.ts`: `get-token-distances` (new tool) + `formatTokenDetails` stat-block
       extension (row 3, 42 ln)
-- [ ] **`data-access.ts`: `getTokenDetails` → `this.extractTokenActorStats(token.actor)` and the
+- [x] **`data-access.ts`: `getTokenDetails` → `this.extractTokenActorStats(token.actor)` and the
       new `extractTokenActorStats` helper (row 4, 5 + 54 ln).** Without this, row 3 has no data.
-- [ ] `scene.ts`: hidden tokens — **two places**, `handleGetCurrentScene`'s zod default (row 1)
-      and `getToolDefinitions`' `includeHidden` default + description (row 2). Both flip
-      `false` → `true`; changing only one leaves the tool and its schema disagreeing.
-- [ ] Check interaction with upstream's `8546b0f` synthetic-token-actor resolution
-- [ ] **You:** confirm hidden tokens appear in `get-current-scene`; request token distances;
+- [x] `scene.ts`: hidden tokens — **three lines across two methods.** `handleGetCurrentScene`'s
+      zod default (row 1) plus `getToolDefinitions`' `includeHidden` default **and** its
+      description (row 2). Changing only one leaves the tool and its schema disagreeing.
+- [x] Check interaction with upstream's `8546b0f` synthetic-token-actor resolution — **none**, see below
+- [x] Built, typechecked, formatted, bundled, deployed (both packages, matched pair).
+      **216 insertions, 11 deletions**; every deletion is inside a line we own (the two
+      `includeHidden` defaults) or the `actorData` block being replaced. No upstream line touched.
+      Control-port probe: **51 tools** = 43 stock + 8 ported, `get-token-distances` present,
+      and the live schema reports `includeHidden` `default: true`.
+- [x] **You:** confirm hidden tokens appear in `get-current-scene`; request token distances;
       confirm `get-token-details` returns a full stat block, not just name/type/img
-- **Gate:** distances correct in feet; hidden tokens visible to GM; stat block populated.
+- **Gate:** distances correct in scene units; hidden tokens visible to GM; stat block populated.
 - **Risk:** budget 1-2 fix cycles here specifically. This is the phase most likely to need iteration,
-  and the estimate is a guess, not a measurement.
+  and the estimate is a guess, not a measurement. **Outcome: zero fix cycles on the ported code.**
+  The one deploy-blocking defect was an unrelated pre-existing backend crash (below). Reading the
+  v14 API up front is what moved this phase from Med-High to first-try.
+
+**Phase 4 gate results (2026-08-15)** — scene with 5 tokens, one hidden, two unlinked copies of
+`Chelaxian Recruit` sharing `actorId: dZqZzPFjGYz7s7rs`.
+
+| Check           | Result                                                                                         |
+| --------------- | ---------------------------------------------------------------------------------------------- |
+| 1a default flip | ✅ no-param call returned **5** tokens including the hidden one                                |
+| 1b explicit off | ✅ `includeHidden: false` → **4**, exactly the one `hidden: true` token dropped                |
+| 2a matrix       | ✅ `units: "ft"`, complete 6-pair matrix, **every pair `measurement: "grid"`**, no fallback    |
+| 2b/2c diagonal  | ✅ Rabbit↔Ezren (Δ300,Δ300) = 20 ft, and the filtered call returned that one pair at 20 ft    |
+| 3 hp isolation  | ✅ `hp.value` **0 vs 15** across two unlinked copies sharing one `actorId`                     |
+| 3 conditions    | ✅ `["dead"]` on the damaged copy, `[]` on the clean one — **an array, not `{}`**              |
+| 3 isLinked      | ✅ `false` on both                                                                             |
+| 3 field spread  | ✅ `ac: 16`, `saves {fortitude:9, reflex:6, will:4}`, `traits`, `size` all real, cross-checked |
+
+**Gate verdict: PASS.**
+
+#### 🎯 The diagonal arithmetic discriminated three algorithms, where a ruler would have confirmed one
+
+The gate asked for a ruler cross-check. What was done instead is strictly better and worth copying.
+Rabbit→Ezren is 3 pure diagonals, and the three candidate algorithms give three different answers:
+
+| Algorithm                          | Result       |
+| ---------------------------------- | ------------ |
+| PF2e alternating diagonal (5/10/5) | **20 ft** ✅ |
+| Chebyshev (every diagonal 5 ft)    | 15 ft        |
+| Euclidean (`√(300²+300²)/100×5`)   | ~21.2 ft     |
+
+`20` is only producible by the grid's real rule. Rabbit→Recruit corroborates it independently:
+4 diagonals + 1 straight = 5+10+5+10+5 = **35**, which is what came back. So `measurement: "grid"`
+is not merely a label the code attached to itself — the numbers behind it could not have come from
+the fallback branch.
+
+**Rule: prefer a fixture where the candidate explanations produce different numbers over one where
+the expected value merely matches.** A ruler agreeing with `20` would have confirmed the answer
+without ruling out a coincidence; this rules out both rivals at once.
+
+#### ✅ The `Set` fix is proven live — this is the one that would have shipped broken
+
+`conditions: ["dead"]` on the damaged copy is the payoff for the v14 source read. Ported faithfully
+from `master`, that field would have been `{}` on every token forever: `Actor#statuses` is a `Set`,
+and `JSON.stringify(new Set(['dead']))` is `{}`. The clean copy returning `[]` rather than `{}`
+completes it — both shapes are arrays, so the serialisation is right in both the populated and
+empty cases.
+
+#### ✅ Resolved: `level: 0` is a real value, not a `null → 0` coercion
+
+The gate flagged this "cannot determine", reasoning that `0` is what a missing-value fallback
+produces. **Not for this expression** ([`data-access.ts:7695`](../packages/foundry-module/src/data-access.ts#L7695)):
+
+```ts
+const level = sys.details?.level?.value ?? sys.details?.level ?? sys.details?.cr ?? null;
+```
+
+`??` falls through on `null`/`undefined` only, and `0` is neither, so a literal `0` short-circuits
+the chain immediately. The other branches cannot yield `0` either: if `level.value` were missing
+while `level` existed, the result would be the **object** `{…}`, and if `details.level` were absent
+entirely it would fall through to `cr` and then `null`. **`0` is only reachable from
+`system.details.level.value === 0`.**
+
+Corroborated independently: `get-character` reports the same `0` through the server-side pf2e
+adapter, a completely separate code path.
+
+So the extractor is correct and this is not a Phase 4 item. Whether a level-0 NPC with AC 16 and
+Fortitude +9 is _authored_ correctly is a question about the `pf2e-ap222-hellbreakers` module's
+bestiary entry, answerable by opening the sheet. Not our code either way.
+
+> **The `??` vs `||` distinction is why this was decidable.** With `|| 0` the gate's reasoning would
+> have been exactly right and the value genuinely ambiguous. Worth remembering next time a `0`
+> looks suspicious: check which operator produced it before calling it undeterminable.
+
+#### Honest limits of check 3c, as reported
+
+The gate's own caveat is correct and is recorded rather than smoothed over: `get-character` was
+given an `actorId`, so it reads the base actor, and the undamaged token has an empty delta, making
+"reads base actor" and "reads undamaged token" the same data by construction. 3c establishes that
+the damaged token's delta does **not** bleed into the actor-level read. It does not establish which
+document was read. To make it decidable, the clean copy needs some unrelated non-HP delta so the two
+stop being byte-identical.
+
+#### ✅ The headline risk did not materialise — `measurePath` is intact on v14
+
+Checked against the installed v14 client source **before** writing, per the Phase 2 rule. The phase
+was budgeted Med-High almost entirely on this API, and it survived:
+
+| API                                 | v14 status                                                                                                                                               |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `grid.measurePath(waypoints, opts)` | ✅ intact, `common/grid/base.mjs:397`. Returns `{distance, cost, spaces, diagonals, euclidean, …}`, so `path.distance` is still valid and in scene units |
+| `canvas.grid`                       | ✅ `client/canvas/board.mjs:496`, returns `scene.grid` (a `BaseGrid`), `null` on a blank canvas                                                          |
+| `Token#center`                      | ✅ `client/canvas/placeables/token.mjs:448`, delegates to `document.getCenterPoint()`                                                                    |
+| `{ gridSpaces: true }`              | ⚠️ **not a v14 option.** See below                                                                                                                       |
+
+**`gridSpaces` was dropped from the port.** v14's `measurePath` documents exactly one option
+(`cost`); `gridSpaces` appears nowhere in `common/grid/`. An unknown option is ignored rather than
+fatal, so this was dead weight plus a comment (`// measurePath is the v12+ API`) asserting it
+mattered. Distances are grid-aware because `measurePath` always is, not because of that flag.
+
+#### ⚠️ Fourth instance of the recurring failure mode: `Actor#statuses` is a `Set`
+
+The port source ended `extractTokenActorStats` with:
+
+```ts
+const conditions = (actor.statuses ?? []) as string[]; // master
+```
+
+`Actor#statuses` is a **`Set<string>`** (`client/documents/actor.mjs:83-87`, and it was a Set on
+v13 too). The payload crosses the wire through `JSON.stringify`
+([`socket-bridge.ts:492`](../packages/foundry-module/src/socket-bridge.ts#L492)), and a Set
+serialises to `{}`. Server-side, `tokenData.actorData.conditions ?? []` then passes `{}` straight
+through, because `{}` is not nullish.
+
+So `conditions` would have arrived empty for every token, forever, with no error. Ported as
+`Array.from(actor.statuses ?? [])`.
+
+**This one is not v14 drift.** It was already broken on `master` and never noticed, because it only
+shows up on a token that actually carries a condition _and_ only if someone checks that field.
+Same family as the `?? 0` roll modifier, the `?? msg.author` speaker, and the `case 3` playlist
+mode: a silent default standing in for a lookup that never succeeded.
+
+#### `8546b0f` does not interact, and it confirms why the stat block matters
+
+Upstream's synthetic-token-actor commit extends **`findActorByIdentifier`** only. `getTokenDetails`
+already resolves through `scene.tokens.get(id).actor`, so there is nothing to reconcile.
+
+The useful part is what it does _not_ cover: `getCharacterInfo`, which backs `get-character`, still
+resolves only against `game.actors` by id or exact name
+([`data-access.ts:1685-1691`](../packages/foundry-module/src/data-access.ts#L1685-L1691)). A
+synthetic actor is not in `game.actors`, so **`get-character` cannot reach an unlinked token's own
+HP or conditions at all.** That is precisely the gap row 4 fills: on a map with four copies of one
+NPC, the per-copy damage is only readable through `get-token-details`.
+
+#### Two things flagged, not fixed
+
+- **The fallback branch measures differently from the primary one.** When canvas placeables are
+  unavailable, `getTokenDistances` falls back to raw euclidean pixel math, which ignores the grid's
+  diagonal rules. The two branches therefore disagree on a diagonal pair. Only reachable with an
+  unrendered canvas, so latent — but the response now carries a `measurement` field
+  (`grid` / `euclidean-fallback`) so the two can never be silently confused. That field is the
+  one deliberate addition beyond the port, on the Phase 1.5 `warnOnMissingModifier` precedent:
+  it cannot change a number, it only says which path produced it.
+- **Elevation is ignored.** v14's `measurePath` gained 3D overloads with `elevation` on waypoints,
+  but we pass 2D centers, so a creature flying 20 ft up measures as adjacent. Using it is a
+  re-derive rather than a re-port, so it is filed to 7d.
+
+#### Housekeeping: `npm run format` dirties five files we never touched, in two different ways
+
+A repo-wide `npm run format` left five unrelated upstream files modified. They are **not** the same
+problem, and the second one is worth knowing because it looks alarming and is not:
+
+1. **One real reformat.** `tools/character.ts` — Prettier wrapped an over-long zod enum in
+   `handleManageWorldItems`. **Upstream's tip is not fully Prettier-clean under its own config.**
+2. **Four phantom modifications**, content **hash-identical to the index** (`git hash-object` ==
+   `git ls-files -s`): `systems/dsa5/index.ts`, `systems/index-builder-registry.ts`,
+   `utils/comfyui-paths.ts`, `shared/tsconfig.json`. `git status` reports them modified while
+   `git diff` shows nothing at all, including `--raw`. Cause is this repo's
+   `core.autocrlf=true` fighting `.gitattributes`' `* text=auto eol=lf`: Prettier touched their
+   mtimes, and on refresh git decides the worktree differs from what a checkout would write, even
+   though the blob is byte-identical. `git update-index --refresh` does **not** clear it.
+
+All five reverted so the phase diff stays free of upstream noise. **Verify the hash before
+reverting anything in class 2** — identical hashes are what makes the revert provably a no-op rather
+than a discarded change.
+
+Prefer the husky/lint-staged path (staged files only) over a repo-wide `npm run format`, or expect
+to clean this up every phase. And when `git status` and `git diff` disagree, compare blob hashes
+before believing either one.
+
+#### ⚠️ Backend dies on an abrupt control-client disconnect (upstream, pre-existing)
+
+Hit for real on 2026-08-15: the hand-started backend from the Phase 4 deploy exited 1 with an
+unhandled `ECONNRESET`, leaving nothing on 31414/31415 and no lock file.
+
+```
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+Emitted 'error' event on Socket instance at: ...
+```
+
+Cause is in [`backend.ts` ~L1496](../packages/mcp-server/src/backend.ts#L1496): the control channel's
+`net.createServer(socket => …)` attaches **only** a `data` listener to each connection socket. There
+is no `socket.on('error', …)`. Node rethrows an `error` event with no listener as an uncaught
+exception, so a client that RSTs its connection takes the whole backend down with it.
+`server.on('error', reject)` at ~L1873 is on the **server**, not on connection sockets, and exists
+only to reject the `listen` promise.
+
+**Not a Phase 4 regression** — nothing in this phase touches socket handling, and the same code is
+in stock v0.8.3. It is the second fragility found around the control channel, after Phase R's
+double-wrapper race, and the two compound: a wrapper that loses the spawn race is exactly the kind
+of client that disappears abruptly.
+
+**This falsifies the Phase R note** claiming the backend survives abrupt disconnects. That note was
+written from a test that must have closed gracefully. Corrected in place above.
+
+**✅ FIXED and verified 2026-08-15.** A `socket.on('error', …)` handler now logs and drops the
+connection instead of letting Node rethrow. Server bundles only; the module is untouched, so the
+matched pair holds.
+
+**Verified by reproducing the crash, not by assuming the fix.** `rsttest.cjs` connects to 31414,
+writes a partial line so the backend has an active read, then calls `socket.resetAndDestroy()` to
+send a real RST. Before: process dead. After:
+
+```
+mcp-server.log  {"error":"read ECONNRESET","level":"warn",
+                 "message":"Control client socket error, dropping that connection"}
+backend PID     89956 before → 89956 after, still listening
+```
+
+Same error string that killed the old process, now survived. That before/after pairing is the point:
+a fix that merely fails to crash proves nothing unless the trigger is known to have fired.
+
+#### ⚠️ Correction: the Phase R mitigation does not prevent this
+
+Phase R's advice is _"make sure a backend is already listening on 31414 before starting Claude
+Desktop; both wrappers then just connect, neither spawns, and there is no race."_ That is exactly
+what was done on 2026-08-15, and the backend **still died**, because the RST comes from the losing
+wrapper being torn down, not from it spawning anything. Having a backend up is what **exposed** it
+to the reset rather than protecting it.
+
+The two defects compound: the double-launch guarantees a wrapper gets killed, and the missing error
+handler turns that routine teardown into a process kill. The Phase R mitigation addresses the
+spawn race only. With the socket handler in place the teardown is now harmless either way.
+
+#### Notes for the gate — each check needs a fixture that can actually fail
+
+Three phases running have shipped a check that could not distinguish success from a no-op. All
+three items here have that trap:
+
+- **Hidden tokens: call `get-current-scene` with no arguments at all.** That is the only call that
+  proves the _default_ flipped. Passing `includeHidden: true` explicitly would pass on stock code
+  too, so it proves nothing. Cross-check the count against a call with `includeHidden: false`.
+- **Distances: pick a diagonal pair**, and get ground truth from Foundry's own ruler. An orthogonal
+  pair measures the same under grid rules and euclidean math, so it cannot discriminate the two
+  branches. Also confirm `measurement: "grid"` in the response — `euclidean-fallback` on a rendered
+  canvas would mean the placeable lookup failed.
+- **Stat block: needs a token carrying a real condition** (prone, frightened), or the `Set` fix
+  above is unfalsifiable — an unconditioned token returns `[]` whether the code is right or wrong.
+  Use an **unlinked, damaged** token for the HP check, since that is the case `get-character`
+  structurally cannot answer and therefore the reason row 4 exists.
+- All three tools are **GM-gated** in `queries.ts`. Read them from a GM session.
+- **A backend is already listening** (started by hand, PID logged at deploy time). Per the Phase R
+  race note, start Claude Desktop _while it is up_ so neither wrapper needs to spawn one. Foundry
+  was disconnected by the backend kill and **must be refreshed** after the client is up.
 
 ### Phase 5 — Quest journal `replaceContent` 📜 ⬜
 
@@ -1198,6 +1474,20 @@ strategy-decision-4 reason:
       internal value, so a track at 0.5 reads `"50%"` while Foundry's slider shows 63%. Decide
       whether to report the UI percentage (matches what you see, but then read and write use
       different scales) or to report both. Found in Phase 3.
+- [ ] **Hidden tokens: the two tools now disagree by default** — `get-current-scene` includes them
+      (Phase 4 rows 1-2), `get-token-distances` excludes them (faithful to `master`). Recorded at
+      the Phase 4 gate, where the hidden token was also the dead one. Ambushers and lurkers are
+      arguably the tokens a GM most wants a distance to, so consider an `includeHidden` parameter
+      on the distance tool rather than silently dropping them.
+- [ ] **`get-token-distances` returns a field literally named `feet`** alongside a `units` field
+      reporting the scene's real unit. Correct on this world (`units: "ft"`), misleading on a scene
+      in metres. Rename to `distance`, or keep both and document the unit.
+- [ ] **`get-token-distances` ignores elevation** — v14's `measurePath` accepts 3D waypoints with an
+      `elevation` field, but we pass 2D centers, so a flying creature 20 ft up measures as adjacent.
+      Found in Phase 4. Using the 3D overload is new work, not a re-port.
+- [ ] **The distance fallback branch uses different math from the primary one** — euclidean pixels
+      vs. grid rules, so the two disagree on diagonals. Currently only distinguishable by the
+      `measurement` field in the response. Either make the fallback grid-aware or drop it.
 - [ ] **Exact-match lookups lose to substring matches** — `findPlaylist`, the sound lookup in
       `playPlaylist`, and the journal + page lookups in `showJournalToPlayers` all OR their clauses
       inside one `find()` predicate, so the first element matching _any_ clause wins and collection
