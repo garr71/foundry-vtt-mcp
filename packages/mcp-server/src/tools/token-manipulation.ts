@@ -178,6 +178,25 @@ export class TokenManipulationTools {
           properties: {},
         },
       },
+      {
+        name: 'get-token-distances',
+        description:
+          'Calculate distances in scene units (typically feet) between tokens on the current scene using the scene grid. ' +
+          'Returns a distance matrix for all token pairs, or only the requested subset. ' +
+          'Distances follow the grid measurement rules of the scene (including diagonal rules), ' +
+          'but are line-of-sight agnostic: walls and obstacles are not accounted for, and elevation is ignored.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            tokenIds: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'Optional list of token IDs to include. Omit to include all visible tokens on the scene.',
+            },
+          },
+        },
+      },
     ];
   }
 
@@ -351,7 +370,15 @@ export class TokenManipulationTools {
             name: tokenData.actorData.name,
             type: tokenData.actorData.type,
             img: tokenData.actorData.img,
-            isLinked: tokenData.actorLink,
+            isLinked: tokenData.actorData.isLinked ?? tokenData.actorLink,
+            level: tokenData.actorData.level ?? null,
+            hp: tokenData.actorData.hp ?? null,
+            ac: tokenData.actorData.ac ?? null,
+            saves: tokenData.actorData.saves ?? null,
+            traits: tokenData.actorData.traits ?? [],
+            size: tokenData.actorData.size ?? null,
+            rarity: tokenData.actorData.rarity ?? null,
+            conditions: tokenData.actorData.conditions ?? [],
           }
         : null,
     };
@@ -425,6 +452,25 @@ export class TokenManipulationTools {
       this.logger.error('Failed to get available conditions', error);
       throw new Error(
         `Failed to get available conditions: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  async handleGetTokenDistances(args: any): Promise<any> {
+    const schema = z.object({
+      tokenIds: z.array(z.string()).optional(),
+    });
+
+    const { tokenIds } = schema.parse(args);
+
+    this.logger.info('Getting token distances', { tokenIds });
+
+    try {
+      return await this.foundryClient.query('foundry-mcp-bridge.getTokenDistances', { tokenIds });
+    } catch (error) {
+      this.logger.error('Failed to get token distances', error);
+      throw new Error(
+        `Failed to get token distances: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

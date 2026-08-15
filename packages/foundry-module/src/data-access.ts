@@ -7661,13 +7661,7 @@ export class FoundryDataAccess {
         lockRotation: token.lockRotation,
         img: token.texture?.src,
         actorId: token.actor?.id,
-        actorData: token.actor
-          ? {
-              name: token.actor.name,
-              type: token.actor.type,
-              img: token.actor.img,
-            }
-          : null,
+        actorData: token.actor ? this.extractTokenActorStats(token.actor) : null,
         actorLink: token.actorLink,
       };
     } catch (error) {
@@ -7675,6 +7669,152 @@ export class FoundryDataAccess {
         `Failed to get token details: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * Extract a concise stat block from a token's actor.
+   * Works for both linked actors and synthetic (unlinked) token actors, which is the case
+   * `get-character` cannot reach — each unlinked copy carries its own damage and conditions.
+   */
+  private extractTokenActorStats(actor: any): any {
+    const sys = actor.system || {};
+
+    // HP — pf2e/sf2e/dnd5e all nest under attributes; some systems use a bare hp object
+    const hpObj = sys.attributes?.hp ?? sys.hp ?? {};
+    const hp = {
+      value: hpObj.value ?? null,
+      max: hpObj.max ?? null,
+      temp: hpObj.temp ?? null,
+    };
+
+    // AC
+    const acObj = sys.attributes?.ac ?? sys.ac ?? {};
+    const ac = acObj.value ?? acObj.flat ?? null;
+
+    // Level (pf2e/sf2e) or CR (dnd5e)
+    const level = sys.details?.level?.value ?? sys.details?.level ?? sys.details?.cr ?? null;
+
+    // Saves — pf2e/sf2e: sys.saves.{fortitude|reflex|will}; dnd5e keys abilities instead
+    const saves: Record<string, any> = {};
+    if (sys.saves) {
+      for (const [key, val] of Object.entries(sys.saves as Record<string, any>)) {
+        saves[key] = val?.value ?? val?.totalModifier ?? val?.mod ?? null;
+      }
+    }
+
+    // Traits — array on pf2e/sf2e, object on dnd5e (ignored there rather than mangled)
+    const traitsRaw = sys.traits?.value;
+    const traits: string[] = Array.isArray(traitsRaw) ? traitsRaw : [];
+
+    const size = sys.traits?.size?.value ?? sys.traits?.size ?? null;
+    const rarity = sys.traits?.rarity ?? null;
+
+    // Active conditions. Actor#statuses is a Set<string>; it must be materialised into an
+    // array because this payload crosses the WebSocket as JSON, and a Set serialises to {}.
+    const conditions: string[] = Array.from(actor.statuses ?? []);
+
+    return {
+      name: actor.name,
+      type: actor.type,
+      img: actor.img,
+      level,
+      hp,
+      ac,
+      saves,
+      traits,
+      size,
+      rarity,
+      conditions,
+      isLinked: actor.prototypeToken?.actorLink ?? true,
+    };
+  }
+
+  /**
+   * Measure distances between token pairs on the current scene using the scene's grid.
+   * Straight-line and 2D only: walls are not considered and elevation is ignored.
+   */
+  async getTokenDistances(data: { tokenIds?: string[] }): Promise<any> {
+    this.validateFoundryState();
+
+    const scene = (game.scenes as any).current;
+    if (!scene) {
+      throw new Error('No active scene found');
+    }
+
+    // Collect the relevant token documents
+    let tokenDocs: any[] = Array.from(scene.tokens.contents || []);
+    if (data.tokenIds && data.tokenIds.length > 0) {
+      const idSet = new Set(data.tokenIds);
+      tokenDocs = tokenDocs.filter((t: any) => idSet.has(t.id));
+    } else {
+      // Default: all visible (non-hidden) tokens
+      tokenDocs = tokenDocs.filter((t: any) => !t.hidden);
+    }
+
+    if (tokenDocs.length < 2) {
+      return {
+        success: true,
+        distances: [],
+        message:
+          tokenDocs.length === 0
+            ? 'No matching tokens found.'
+            : 'Only one token found, so there are no pairs to measure.',
+      };
+    }
+
+    // measurePath needs canvas placeables for their center points, not TokenDocuments
+    const canvasTokens: any[] = (canvas as any).tokens?.placeables ?? [];
+    const canvasById = new Map(canvasTokens.map((t: any) => [t.id, t]));
+    const grid = (canvas as any).grid;
+
+    const distances: Array<{
+      from: string;
+      fromId: string;
+      to: string;
+      toId: string;
+      feet: number;
+      measurement: string;
+    }> = [];
+
+    for (let i = 0; i < tokenDocs.length; i++) {
+      for (let j = i + 1; j < tokenDocs.length; j++) {
+        const a = tokenDocs[i];
+        const b = tokenDocs[j];
+
+        const aCanvas = canvasById.get(a.id);
+        const bCanvas = canvasById.get(b.id);
+
+        let feet = 0;
+        let measurement: string;
+        if (aCanvas && bCanvas && grid) {
+          // Grid-aware measurement: honours the scene's diagonal rules. `measurePath`
+          // is the supported API on v12-v14 (`measureDistance` was removed in v14).
+          feet = grid.measurePath([aCanvas.center, bCanvas.center]).distance;
+          measurement = 'grid';
+        } else {
+          // Canvas not rendered: fall back to raw euclidean pixel math. This ignores the
+          // grid's diagonal rules, so it can disagree with the branch above on a diagonal.
+          const gridSize: number = scene.grid?.size ?? 100;
+          const gridDistance: number = scene.grid?.distance ?? 5;
+          const dx = a.x + (a.width * gridSize) / 2 - (b.x + (b.width * gridSize) / 2);
+          const dy = a.y + (a.height * gridSize) / 2 - (b.y + (b.height * gridSize) / 2);
+          const pixelDist = Math.sqrt(dx * dx + dy * dy);
+          feet = (pixelDist / gridSize) * gridDistance;
+          measurement = 'euclidean-fallback';
+        }
+
+        distances.push({
+          from: a.name ?? a.id,
+          fromId: a.id,
+          to: b.name ?? b.id,
+          toId: b.id,
+          feet: Math.round(feet),
+          measurement,
+        });
+      }
+    }
+
+    return { success: true, units: scene.grid?.units ?? 'ft', distances };
   }
 
   /**

@@ -35,8 +35,9 @@ export class SceneTools {
             },
             includeHidden: {
               type: 'boolean',
-              description: 'Whether to include hidden tokens and elements (default: false)',
-              default: false,
+              description:
+                'Whether to include hidden tokens and elements (default: true, so the GM sees the full scene)',
+              default: true,
             },
           },
         },
@@ -55,7 +56,7 @@ export class SceneTools {
   async handleGetCurrentScene(args: any): Promise<any> {
     const schema = z.object({
       includeTokens: z.boolean().default(true),
-      includeHidden: z.boolean().default(false),
+      includeHidden: z.boolean().default(true),
     });
 
     const { includeTokens, includeHidden } = schema.parse(args);

@@ -100,6 +100,7 @@ export class QueryHandlers {
       this.handleToggleTokenCondition.bind(this);
     CONFIG.queries[`${modulePrefix}.getAvailableConditions`] =
       this.handleGetAvailableConditions.bind(this);
+    CONFIG.queries[`${modulePrefix}.getTokenDistances`] = this.handleGetTokenDistances.bind(this);
 
     // Map generation queries (hybrid architecture)
     CONFIG.queries[`${modulePrefix}.generate-map`] = this.handleGenerateMap.bind(this);
@@ -1490,6 +1491,18 @@ export class QueryHandlers {
         `Failed to get available conditions: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
+  }
+
+  /**
+   * Handle get token distances request
+   */
+  private async handleGetTokenDistances(data: { tokenIds?: string[] }): Promise<any> {
+    const gmCheck = this.validateGMAccess();
+    if (!gmCheck.allowed) {
+      return { error: 'Access denied', success: false };
+    }
+    this.dataAccess.validateFoundryState();
+    return await this.dataAccess.getTokenDistances(data || {});
   }
 
   /**
