@@ -268,7 +268,7 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | 2     | Chat read/send + journal display                      | new ×2        | Low          | ✅ **done**  |
 | 3     | Playlist control                                      | new           | Low          | ✅ **done**  |
 | 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ✅ **done**  |
-| 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | 🔄 deployed  |
+| 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ✅ **done**  |
 | 6     | Promote → `master` + docs                             | —             | Low          | ⬜           |
 | 7     | **Module-dependent** re-integration + enhancements    | new           | Med          | ⬜ _after 6_ |
 | —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred  |
@@ -1373,7 +1373,7 @@ three items here have that trap:
   race note, start Claude Desktop _while it is up_ so neither wrapper needs to spawn one. Foundry
   was disconnected by the backend kill and **must be refreshed** after the client is up.
 
-### Phase 5 — Quest journal `replaceContent` 📜 🔄 DEPLOYED 2026-08-15, awaiting gate
+### Phase 5 — Quest journal `replaceContent` 📜 ✅ DONE (gate passed 2026-08-15, round 2)
 
 Stays in the main line: **core-Foundry code, no module guard**, an exact 33-line reference, and
 useful on any journal. But it carries a _soft_ module interaction that must ship with it.
@@ -1399,6 +1399,39 @@ One real defect found, in the guard's error reporting. Round 2 pending after the
 | B — append still works      | ✅ replaced content intact, new line appended after it        |
 | C — guard refuses           | ⚠️ call failed, but with a **generic** error identical to D's |
 | D — append on an SQ page    | ❌ failed, same generic error                                 |
+
+**Phase 5 gate round 2 (2026-08-15)** — after the structured-refusal fix. Fresh fixtures: a
+standalone `create-quest-journal` entry in folder "MCP Testing" for A/B, and the world's one
+`simple-quest.quest` page for C/D, re-discovered by type rather than by a round-1 id.
+
+| Check                    | Result                                                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------- |
+| C — guard                | ✅ **returned**, not thrown; all five elements present (`refused`, `reason`, name, type, why) |
+| C vs D distinguishable   | ✅ structured JSON return vs thrown error — no longer byte-identical                          |
+| D — append on SQ page    | ⚠️ threw the same content-free generic error → **cannot determine** (fixed after, below)      |
+| A — replace              | ✅ ~1.4 KB body reduced to the 122-char replacement; no fragment survived                     |
+| B — append after replace | ✅ 122 → 199 chars, marker A intact with marker B appended after it                           |
+
+**Gate verdict: PASS.** C is proven by an independent read of the response, not by inference.
+
+#### Round 2 follow-up: the append path had the same reporting defect, and it is now fixed
+
+The gate marked D **"cannot determine" rather than "fail"**, and was right to: the C/D pair was
+distinguishable, which was the stated pass condition, but D's own error stayed the opaque template,
+so _"a correctly-handled 'no readable content' case and a genuinely broken tool would still produce
+this identical string."_
+
+Worse, the refusal message in C **asserts** that append does not work on these pages. D could not
+confirm that assertion, which made it an unfalsifiable claim in user-facing text.
+
+Fixed symmetrically: the append path already holds `pageResult.type`, so a non-text page now returns
+a structured `reason: 'unreadable-page-type'` explaining that the reader only returns body content
+for text pages, with an extra sentence when the page is specifically an SQ quest page. **Zero extra
+queries** — the type was already fetched and discarded.
+
+This generalises beyond page types: **`ErrorHandler.handleToolError` erases the message of every
+error thrown inside a tool handler.** Any diagnostic worth writing in this codebase must be returned,
+not thrown, or it never reaches the caller. Two instances found in one phase, in one method.
 
 #### ⚠️ The guard fired correctly and reported like a crash — the gate could not tell them apart
 

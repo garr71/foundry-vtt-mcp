@@ -479,6 +479,38 @@ export class QuestCreationTools {
         if (!pageResult || pageResult.error) {
           throw new Error(`Page not found: ${request.pageId}`);
         }
+
+        // getJournalPageContent returns `page.type === 'text' ? page.text.content : page.src`,
+        // so every non-text page reads as '' and append has nothing to build on. Upstream then
+        // hits a bare "no content to update" throw, which the catch turns into an opaque system
+        // error — the exact ambiguity that made the Phase 5 gate's check D unverifiable. Explain
+        // it instead, mirroring the replaceContent refusal.
+        if (pageResult.type && pageResult.type !== 'text') {
+          this.logger.info('Append not possible: page type is not readable as text', {
+            journalId: request.journalId,
+            pageId: request.pageId,
+            pageType: pageResult.type,
+          });
+
+          return {
+            success: false,
+            refused: true,
+            reason: 'unreadable-page-type',
+            pageId: request.pageId,
+            pageName: pageResult.name ?? null,
+            pageType: pageResult.type,
+            message:
+              `Cannot append to page "${pageResult.name ?? request.pageId}": its type is ` +
+              `"${pageResult.type}", not "text". The journal reader only returns body content ` +
+              `for text pages, so there is nothing to append to. Nothing was modified.` +
+              (this.isSimpleQuestQuestPage(pageResult.type)
+                ? ' Simple Quest quest pages must be edited through Simple Quest itself; ' +
+                  'replaceContent is refused on them as well, because it would reset every ' +
+                  'objective checkbox.'
+                : ''),
+          };
+        }
+
         currentContent = pageResult.content;
       } else {
         const currentJournal = await this.foundryClient.query(
