@@ -1496,6 +1496,16 @@ async function startBackend(): Promise<void> {
   const server = net.createServer(socket => {
     socket.setEncoding('utf8');
 
+    // A control client that vanishes abruptly (RST rather than FIN) emits 'error' on this
+    // socket. Node rethrows an 'error' with no listener as an uncaught exception, which would
+    // take the whole backend down with the client. Claude Desktop launches two stdio wrappers
+    // milliseconds apart and tears one down, so this is a routine event, not an exotic one.
+    socket.on('error', (err: Error) => {
+      logger.warn('Control client socket error, dropping that connection', {
+        error: err?.message ?? String(err),
+      });
+    });
+
     let buffer = '';
 
     socket.on('data', async (chunk: string) => {
