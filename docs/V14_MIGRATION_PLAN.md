@@ -1517,6 +1517,28 @@ checkboxes survive". Without it, 7a's gate would be "replace content, check the 
 ticked", which passes trivially if the remapping silently no-ops on a page whose keys happened not
 to change. Same before/after discipline as the RST reproduction in Phase 4.
 
+#### 🔒 MCP cannot create a Simple Quest quest page — scoping constraint for 7a
+
+Franklin, 2026-08-15: _"Simple Quest ONLY reads quests created inside of it."_ Structurally true
+from our side as well: `updateJournalContent`'s create path hardcodes `type: 'text'`
+([`data-access.ts`](../packages/foundry-module/src/data-access.ts), mode 1), and
+`create-quest-journal` makes an ordinary `JournalEntry`. **Nothing MCP creates can ever be a
+`simple-quest.quest` page.**
+
+Two consequences, one reassuring and one that scopes 7a:
+
+- The guard can only ever fire on a genuine SQ page, and an MCP-created journal is never at risk
+  from `replaceContent`. The narrow scoping above holds.
+- **7a can modify existing SQ quests but not create them.** Creating one means writing a page with
+  `type: 'simple-quest.quest'` and a fully populated `system` schema directly via
+  `createEmbeddedDocuments`, bypassing SQ's own creation flow — a materially bigger job than
+  toggling an objective, and one that would need the 5.1.4 schema reproduced faithfully. Decide
+  explicitly whether 7a is in the modify-only business before starting it.
+
+This also explains the scratch-page confusion in gate round 1: an MCP-created page dropped into the
+SQ journal is invisible in SQ's interface because SQ renders only `simple-quest.*` subtypes, and it
+was never going to be anything else.
+
 #### Scope decision: `simple-quest.quest` only, not `simple-quest.*`
 
 SQ 5.x ships twelve page subtypes; only `quest` carries `system.objectiveState`. The others keep
@@ -1568,8 +1590,17 @@ violate strategy decision 4 while looking like compliance.
 - [ ] `set-quest-visibility` — collapse to a single Foundry-ownership path
 - [ ] `update-quest-journal replaceContent` — replace Phase 5's refusal guard with real key
       remapping, so content can be rewritten without orphaning objective state
+- [ ] **Decide the scope boundary first: modify-only, or create too?** MCP cannot currently produce
+      a `simple-quest.quest` page at all (see the constraint recorded in Phase 5), so quest
+      _creation_ is a separate and much larger job than quest _modification_. Settle this before
+      writing anything, not halfway through.
+- [ ] **A reader that can see `simple-quest.*` pages.** `getJournalPageContent` returns `page.src`
+      for non-text types, so every SQ page currently reads as `""`. This blocks append, blocks any
+      read-modify-write, and made two Phase 5 gate checks unverifiable. Likely the first thing 7a
+      needs, before any of the tools above.
 - [ ] **Re-verify every claim against the installed module before writing.** Three for three have
-      been wrong so far.
+      been wrong so far, and Phase 5's gate made it four (append to an SQ page was documented here
+      as legal; it has never worked).
 
 Full analysis in "Simple Quest 3.0.20 → 5.1.4" below.
 
