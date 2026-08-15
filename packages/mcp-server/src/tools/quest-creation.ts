@@ -182,6 +182,12 @@ export class QuestCreationTools {
               description:
                 'If provided (without pageId), creates a new page with this name instead of updating an existing one.',
             },
+            replaceContent: {
+              type: 'boolean',
+              description:
+                'If true, REPLACES the entire page content instead of appending. Use this when you need to edit existing text (fix typos, rewrite sections, insert mid-page). Read the page first with list-journals to get the current HTML, modify it, then write back the full content. Refused on Simple Quest quest pages, which would lose their objective state. Default: false (append).',
+              default: false,
+            },
           },
           required: ['journalId', 'newContent', 'updateType'],
         },
@@ -360,6 +366,7 @@ export class QuestCreationTools {
         updateType: z.enum(['progress', 'completion', 'failure', 'modification']),
         pageId: z.string().optional(),
         newPageName: z.string().optional(),
+        replaceContent: z.boolean().default(false),
       });
 
       const request = requestSchema.parse(args);
@@ -390,7 +397,55 @@ export class QuestCreationTools {
         };
       }
 
-      // Get current journal content (for the target page)
+      // Replace mode: write newContent directly as the full page content (no read-modify-append)
+      if (request.replaceContent) {
+        // Simple Quest quest pages store objective state in system.objectiveState, keyed by a
+        // slug derived from each objective's <li> text at render time. Rewriting text.content
+        // changes those derived keys, orphaning every stored entry: checkboxes and secrets all
+        // reset, with no error and a success response. Refuse rather than corrupt.
+        // Only reachable with an explicit pageId — without one, updateJournalContent targets the
+        // first page of type 'text', which an SQ quest page never is.
+        if (request.pageId) {
+          const target = await this.foundryClient.query(
+            'foundry-mcp-bridge.getJournalPageContent',
+            {
+              journalId: request.journalId,
+              pageId: request.pageId,
+            }
+          );
+
+          if (this.isSimpleQuestQuestPage(target?.type)) {
+            throw new Error(
+              `Refused: page "${target?.name ?? request.pageId}" is a Simple Quest quest page ` +
+                `(type: ${target.type}). Replacing its content would reset every objective ` +
+                `checkbox, because Simple Quest derives objective state keys from the objective ` +
+                `text itself. Use append mode (omit replaceContent), or edit the page in Foundry.`
+            );
+          }
+        }
+
+        const result = await this.foundryClient.query('foundry-mcp-bridge.updateJournalContent', {
+          journalId: request.journalId,
+          content: request.newContent,
+          pageId: request.pageId,
+        });
+
+        if (!result || result.error || !result.success) {
+          throw new Error(result?.error || 'Failed to replace journal content');
+        }
+
+        return {
+          success: true,
+          updateType: request.updateType,
+          message: `Page content replaced in journal`,
+          pageId: result.pageId,
+          pageName: result.pageName,
+          verified: true,
+          replaceContent: true,
+        };
+      }
+
+      // Append mode (default): read current content, format the update, append
       let currentContent: string;
       if (request.pageId) {
         const pageResult = await this.foundryClient.query(
@@ -907,6 +962,20 @@ export class QuestCreationTools {
    * Format quest update based on type (HTML for Foundry v13 ProseMirror)
    * Maintains professional styling by adding updates with proper section headings
    */
+  /**
+   * Is this page a Simple Quest *quest* page, i.e. one whose objective state is keyed by
+   * objective text and would therefore be orphaned by a wholesale content rewrite?
+   *
+   * Deliberately narrow. Simple Quest 5.x ships twelve page subtypes, but only `quest` carries
+   * `system.objectiveState`; the rest keep their data in typed system fields that a text.content
+   * rewrite does not touch. A guard that refuses more than it must trains callers to work around it.
+   *
+   * This predicate is the seam for Phase 7a, which replaces the refusal with real key remapping.
+   */
+  private isSimpleQuestQuestPage(pageType: string | undefined): boolean {
+    return pageType === 'simple-quest.quest';
+  }
+
   /**
    * Format content for a brand new page (no existing content to append to)
    */

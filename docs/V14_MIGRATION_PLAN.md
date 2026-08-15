@@ -268,7 +268,7 @@ Legend: ⬜ not started · 🔄 in progress · ✅ done · ⏭️ deferred
 | 2     | Chat read/send + journal display                      | new ×2        | Low          | ✅ **done**  |
 | 3     | Playlist control                                      | new           | Low          | ✅ **done**  |
 | 4     | Token distances + hidden tokens + stat block          | **shared ×3** | **Med-High** | ✅ **done**  |
-| 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | ⬜           |
+| 5     | Quest journal `replaceContent` + SQ refusal guard     | **shared**    | Med          | 🔄 deployed  |
 | 6     | Promote → `master` + docs                             | —             | Low          | ⬜           |
 | 7     | **Module-dependent** re-integration + enhancements    | new           | Med          | ⬜ _after 6_ |
 | —     | sf2e adapter + sf2e index                             | sf2e          | —            | ⏭️ deferred  |
@@ -1373,17 +1373,79 @@ three items here have that trap:
   race note, start Claude Desktop _while it is up_ so neither wrapper needs to spawn one. Foundry
   was disconnected by the backend kill and **must be refreshed** after the client is up.
 
-### Phase 5 — Quest journal `replaceContent` 📜 ⬜
+### Phase 5 — Quest journal `replaceContent` 📜 🔄 DEPLOYED 2026-08-15, awaiting gate
 
 Stays in the main line: **core-Foundry code, no module guard**, an exact 33-line reference, and
 useful on any journal. But it carries a _soft_ module interaction that must ship with it.
 
-- [ ] Re-graft the `replaceContent` mode onto upstream's `update-quest-journal` (33 ln, shared file)
-- [ ] **Add a page-type guard** (~3 ln, the one deliberate addition): refuse `replaceContent` on
+- [x] Re-graft the `replaceContent` mode onto upstream's `update-quest-journal` (33 ln, shared file),
+      plus the matching `getToolDefinitions` entry (also on `master`, and easy to miss: without it
+      the parameter exists in the zod schema but is invisible to callers)
+- [x] **Add a page-type guard** (the one deliberate addition): refuse `replaceContent` on
       `page.type === 'simple-quest.quest'` with an explanatory error. Needs no Simple Quest
       knowledge beyond a string compare, and removes the hazard below entirely.
+- [x] Built, typechecked, formatted, bundled, deployed. **70 insertions, 1 deletion, one file** —
+      `quest-creation.ts` only. Probe: still **51 tools**, `replaceContent` present on
+      `update-quest-journal` with `default: false`.
 - [ ] **You:** test content replacement on a **plain** journal page in the v14 world
 - **Gate:** `replaceContent` behaves as on old `master`; the guard refuses an SQ quest page.
+
+#### Not a 4-file port — one file, because both module-side pieces already exist
+
+`updateJournalContent` (the write) and `getJournalPageContent` (which the guard needs) are both
+already registered upstream, and the latter **already returns `type`**. So the guard cost one extra
+query and zero module changes, and the module bundle is untouched, which keeps the matched pair
+intact without a module redeploy.
+
+#### The guard is narrower than "is this Simple Quest"
+
+Two conditions, both required: replace mode **and** an SQ quest page. Everything else passes.
+
+| Call                        | SQ quest page? | Outcome                                                        |
+| --------------------------- | -------------- | -------------------------------------------------------------- |
+| Create page (`newPageName`) | n/a            | proceeds; never touches existing state                         |
+| Append (default)            | no             | proceeds                                                       |
+| Append (default)            | **yes**        | **proceeds** — existing `<li>` text is unchanged, so keys live |
+| `replaceContent: true`      | no             | proceeds; this is the feature                                  |
+| `replaceContent: true`      | **yes**        | **refused**, nothing written                                   |
+
+Appending to an SQ page is deliberately still legal. Blocking it would be a regression for no
+safety gain, since appending cannot change an existing objective's text and therefore cannot change
+its derived key.
+
+**The guard only runs when `pageId` is given**, and that is sufficient rather than lazy:
+`updateJournalContent`'s no-`pageId` path selects `journal.pages.find(p => p.type === 'text')`, so
+an SQ quest page is unreachable without an explicit id. Verified in the module source, not assumed.
+
+#### Deliberately not built for Phase 7a
+
+7a is a **replacement** for this guard, not an extension of it: "refuse because the keys would
+orphan" and "remap the keys so they do not" share no logic. Three plan claims about Simple Quest
+have already proven wrong, so designing Phase 5 around assumptions about 7a's shape invites a
+fourth. Decisions taken instead:
+
+- **Interface identical to `master`'s** (`replaceContent: boolean`, nothing else). When 7a lands,
+  callers change nothing; the error simply stops happening.
+- **No `force` / `bypass` flag.** It would become permanent API surface whose only purpose is
+  performing the destructive write the guard exists to prevent.
+- **The error message names the mechanism, not the prohibition** — the derived-key behaviour is
+  precisely what 7a removes, so the message documents the seam.
+- **The page-type test is an isolated predicate** (`isSimpleQuestQuestPage`), so 7a has one obvious
+  place to replace rather than an inline string compare to hunt for.
+
+**The refusal is itself a gate fixture for 7a.** It gives a documented operation that provably
+fails today, so 7a's gate becomes "the exact call Phase 5 refused now succeeds **and** the
+checkboxes survive". Without it, 7a's gate would be "replace content, check the boxes are still
+ticked", which passes trivially if the remapping silently no-ops on a page whose keys happened not
+to change. Same before/after discipline as the RST reproduction in Phase 4.
+
+#### Scope decision: `simple-quest.quest` only, not `simple-quest.*`
+
+SQ 5.x ships twelve page subtypes; only `quest` carries `system.objectiveState`. The others keep
+their data in typed `system` fields that a `text.content` rewrite does not touch. Guarding all of
+them would refuse writes that are provably safe, and a guard that refuses more than it must trains
+callers to route around it. Narrow it is — but re-verify against the installed 5.1.4 module before
+7a, per the standing rule.
 
 #### ⚠️ `replaceContent` silently wipes Simple Quest objective state
 
