@@ -1615,27 +1615,42 @@ Phase 7 can do this properly by remapping state onto the new keys. Phase 5 just 
 | `archive/master-sf2e-v13` | `fd66b9a` | old sf2e/v13 line (v0.7.0), port source for the remainder |
 | `archive/v14-port-v082`   | `8dc4f59` | interim v0.8.2 branch, Phase 1 combat reference           |
 
-#### ⚠️ Nothing was pushed, and publishing needs a decision
+#### ✅ Published 2026-08-15, archives first
 
-Local `master` reports **ahead 115, behind 14** of `origin/master`, because the two are different
-lineages rather than divergent histories — exactly what re-forking produces. Publishing the v14 line
-would be a **force push** that replaces the public fork's main line. That is a real decision, it was
-not part of "go ahead with phase 6", and it was not taken.
+Franklin authorised the publish after the promotion. Local `master` had reported **ahead 116,
+behind 14** of `origin/master` — different lineages rather than divergent histories, which is what
+re-forking produces. The merge base is `62cd3fb`, the original fork point; the "14 behind" are the
+sf2e line's own custom-tool commits, i.e. exactly the work this migration re-ported by hand.
 
-Also live: the `upstream` remote has a **push** URL to `adambdooley/foundry-vtt-mcp`. A careless
-`git push upstream` would attempt to write to the real upstream. Phase R already unset tracking on
-this branch for that reason; keep it that way.
+A plain push is rejected in that situation because the remote tip is not an ancestor of the new one,
+so this needed a force push. Done in the safe order:
 
-When publishing is wanted, the safe order is: push the two `archive/*` branches first so the old
-line survives on the remote independently of `origin/master`, verify they landed, and only then
-force-push `master`.
+1. `git fetch origin`, confirm `origin/master` still at `8105290` (nothing moved under us).
+2. Push **both `archive/*` branches first**, and verify their SHAs on the remote with `ls-remote`.
+3. `git push --force-with-lease=refs/heads/master:8105290 origin master`. The explicit lease means
+   the push aborts rather than clobbering anything if the remote moved after step 1.
 
-#### Old `master` was ahead of its remote by 2 commits
+**Verified afterwards that nothing was destroyed:** `git merge-base --is-ancestor 8105290
+archive/master-sf2e-v13` confirms the old `origin/master` tip is still reachable from a permanent
+named branch. Checked, not assumed.
 
-`fd66b9a` (`chore: add allowlist entries to .claude settings`) and one before it were never pushed.
-They are preserved in `archive/master-sf2e-v13`, so nothing is lost, but it means the archive branch
-and `origin/master` are **not** identical. Push the archive before assuming the remote holds the
-whole sf2e line.
+| Remote branch             | Commit    |                                                     |
+| ------------------------- | --------- | --------------------------------------------------- |
+| `master`                  | `4056ae8` | v0.8.3 / Foundry v14 / pf2e                         |
+| `archive/master-sf2e-v13` | `fd66b9a` | old sf2e line, incl. 2 commits the remote never had |
+| `archive/v14-port-v082`   | `8dc4f59` | interim reference                                   |
+| `v14-port`                | `8dc4f59` | pre-existing, untouched; safe to delete             |
+
+Still live as a hazard: the `upstream` remote has a **push** URL to `adambdooley/foundry-vtt-mcp`.
+A careless `git push upstream` would attempt to write to the real upstream. Phase R unset tracking
+on this branch for that reason; keep it that way.
+
+#### Why the archive had to go first
+
+Old `master` was ahead of its **own** remote by 2 unpushed commits (`fd66b9a` and one before it).
+So `archive/master-sf2e-v13` is a strict superset of what `origin/master` held: pushing the archive
+made the fork _better off_ than before, while force-pushing `master` alone would have made those two
+commits unreachable from any branch. Ordering was the whole safety margin.
 
 ### Phase 7 — Module-dependent re-integration & enhancements 🧩 ⬜ (new, 2026-08-13)
 
