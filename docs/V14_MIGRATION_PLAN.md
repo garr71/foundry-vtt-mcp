@@ -1387,8 +1387,86 @@ useful on any journal. But it carries a _soft_ module interaction that must ship
 - [x] Built, typechecked, formatted, bundled, deployed. **70 insertions, 1 deletion, one file** —
       `quest-creation.ts` only. Probe: still **51 tools**, `replaceContent` present on
       `update-quest-journal` with `default: false`.
-- [ ] **You:** test content replacement on a **plain** journal page in the v14 world
+- [x] **You:** test content replacement on a **plain** journal page in the v14 world
 - **Gate:** `replaceContent` behaves as on old `master`; the guard refuses an SQ quest page.
+
+**Phase 5 gate round 1 (2026-08-15)** — checks A and B **PASS**, C **inconclusive**, D **failed**.
+One real defect found, in the guard's error reporting. Round 2 pending after the fix below.
+
+| Check                       | Result                                                        |
+| --------------------------- | ------------------------------------------------------------- |
+| A — replace on a plain page | ✅ old body wholly gone, only the new marker remained         |
+| B — append still works      | ✅ replaced content intact, new line appended after it        |
+| C — guard refuses           | ⚠️ call failed, but with a **generic** error identical to D's |
+| D — append on an SQ page    | ❌ failed, same generic error                                 |
+
+#### ⚠️ The guard fired correctly and reported like a crash — the gate could not tell them apart
+
+The gate's key observation: **C and D failed with byte-identical generic errors**, so C's failure
+was not evidence the guard fired. It was equally consistent with every write to that page being
+broken. _"A guard that refuses correctly and a tool that crashes indiscriminately are
+indistinguishable from the outside here."_
+
+Cause, confirmed after the fact: `handleUpdateQuestJournal` wraps its entire body in one `try`, and
+its `catch` calls `errorHandler.handleToolError`, which maps an unrecognised error to type `system`
+and **replaces the message** with a generic _"An unexpected error occurred / Check Foundry VTT
+console"_ template ([`error-handler.ts:228`](../packages/mcp-server/src/utils/error-handler.ts#L228)).
+The guard's carefully-worded refusal never reached the caller.
+
+**Fixed by returning a structured refusal instead of throwing**, which also matches the existing
+precedent in `queries.ts` (`{ error, success: false }`):
+
+```ts
+return {
+  success: false,
+  refused: true,
+  reason: 'simple-quest-objective-state',
+  pageId,
+  pageName,
+  pageType,
+  message: '…',
+};
+```
+
+A refusal is a policy decision, not an exceptional condition, and routing it through the error path
+was the mistake. This is the direct cost of the thing Phase 5 was explicitly designed to get right:
+the plan said _"the error message names the mechanism, not the prohibition"_, and then the message
+was discarded before anyone could read it. **Writing a good message is not enough; verify it
+survives to the caller.**
+
+#### ❌ Append to an SQ quest page has never worked — the plan's rationale was wrong
+
+Check D falsified a Phase 5 design claim. The plan argued against guarding append because
+_"blocking it would be a regression for no safety gain."_ **There was nothing to regress.**
+
+`getJournalPageContent` returns `page.type === 'text' ? page.text?.content : page.src || ''`, so an
+SQ quest page reads as `""`. The append path then hits upstream's
+`if (!currentContent) throw new Error('Journal/page exists but has no content to update')`.
+
+Not a Phase 5 regression — this is upstream behaviour, identical on `master`. The decision to leave
+append unguarded is still correct (there is nothing to guard), but it was reached from a false
+premise, and only the gate caught that. The refusal message now says so explicitly, so a caller
+told "use append instead" is not sent to a second dead end. **Filed to 7a**, which will need a
+reader that can see `simple-quest.*` pages before append can work at all.
+
+#### The scratch-page episode — two things worth carrying
+
+The gate had no plain page to test on (every text page in the world belongs to the licensed
+Hellbreakers AP), so one was created. Two lessons:
+
+1. **`update-quest-journal newPageName` cannot create a top-level journal.** It takes a required
+   `journalId`, so it always adds a page _inside_ an existing entry. The scratch page landed inside
+   the Simple Quest "Quest Journal" and is invisible in the sidebar, plausibly because SQ renders
+   only `simple-quest.*` page types. `create-quest-journal` is the tool that makes a standalone
+   entry, and it takes an optional `folderName`.
+2. **It changed the tool's default target.** `update-quest-journal` with no `pageId` resolves to
+   `pages.find(p => p.type === 'text')`. That journal previously had no text page; now it has the
+   scratch page, so any future no-`pageId` call against it hits the scratch page. Cleanup is manual
+   — no journal/page delete tool is exposed.
+
+**Gate-design note for next time:** name the fixture _inside_ the prompt, not in the surrounding
+message. The gate stopped and asked which page to use, correctly, because check A is destructive
+and "the plain page" was never defined in the prompt itself.
 
 #### Not a 4-file port — one file, because both module-side pieces already exist
 

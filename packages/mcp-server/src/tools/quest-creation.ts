@@ -415,12 +415,33 @@ export class QuestCreationTools {
           );
 
           if (this.isSimpleQuestQuestPage(target?.type)) {
-            throw new Error(
-              `Refused: page "${target?.name ?? request.pageId}" is a Simple Quest quest page ` +
+            // Return rather than throw. This is a deliberate policy decision, not an exceptional
+            // condition, and the method's catch routes every throw through
+            // ErrorHandler.handleToolError, which discards the message and substitutes a generic
+            // "unexpected error" template. A refusal that reads like a crash is worse than no
+            // refusal: the Phase 5 gate could not tell the guard firing from the tool breaking.
+            // Structured refusals match the precedent in queries.ts ({ error, success: false }).
+            this.logger.info('Refused replaceContent on a Simple Quest quest page', {
+              journalId: request.journalId,
+              pageId: request.pageId,
+              pageType: target.type,
+            });
+
+            return {
+              success: false,
+              refused: true,
+              reason: 'simple-quest-objective-state',
+              pageId: request.pageId,
+              pageName: target?.name ?? null,
+              pageType: target.type,
+              message:
+                `Refused: page "${target?.name ?? request.pageId}" is a Simple Quest quest page ` +
                 `(type: ${target.type}). Replacing its content would reset every objective ` +
                 `checkbox, because Simple Quest derives objective state keys from the objective ` +
-                `text itself. Use append mode (omit replaceContent), or edit the page in Foundry.`
-            );
+                `text itself. Nothing was modified. Edit the page in Foundry instead. ` +
+                `(Append mode does not work on these pages either: the journal reader returns ` +
+                `empty content for non-text page types.)`,
+            };
           }
         }
 
