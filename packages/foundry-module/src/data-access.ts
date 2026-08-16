@@ -7731,9 +7731,19 @@ export class FoundryDataAccess {
 
   /**
    * Measure distances between token pairs on the current scene using the scene's grid.
-   * Straight-line and 2D only: walls are not considered and elevation is ignored.
+   *
+   * Grid-aware and 3D: honours the scene's diagonal rules and each token's elevation, so a
+   * flying creature no longer measures as adjacent to the ground below it. Still line-of-sight
+   * agnostic — walls and obstacles are not considered.
+   *
+   * Runs entirely off documents. `scene.grid` is a real BaseGrid instance (Scene#prepareGrids
+   * replaces the grid config with one), and `TokenDocument#getCenterPoint()` returns an
+   * ElevatedPoint, so nothing here needs the canvas to be rendered. That removes the old
+   * euclidean fallback, which used different math from the grid path and disagreed with it on
+   * diagonals — and it removes a latent mismatch where tokens came from the *active* scene while
+   * `canvas.grid` belonged to the *viewed* one.
    */
-  async getTokenDistances(data: { tokenIds?: string[] }): Promise<any> {
+  async getTokenDistances(data: { tokenIds?: string[]; includeHidden?: boolean }): Promise<any> {
     this.validateFoundryState();
 
     const scene = (game.scenes as any).current;
@@ -7741,20 +7751,40 @@ export class FoundryDataAccess {
       throw new Error('No active scene found');
     }
 
+    const grid = scene.grid;
+    if (typeof grid?.measurePath !== 'function') {
+      throw new Error(
+        `Scene "${scene.name ?? scene.id}" has no usable grid instance, so distances cannot be measured.`
+      );
+    }
+
+    // Must agree with the zod default in token-manipulation.ts.
+    const includeHidden = data.includeHidden ?? true;
+
     // Collect the relevant token documents
-    let tokenDocs: any[] = Array.from(scene.tokens.contents || []);
+    const allTokens: any[] = Array.from(scene.tokens.contents || []);
+    let tokenDocs: any[];
+    const notFound: string[] = [];
     if (data.tokenIds && data.tokenIds.length > 0) {
-      const idSet = new Set(data.tokenIds);
-      tokenDocs = tokenDocs.filter((t: any) => idSet.has(t.id));
+      // Explicit ids are honoured verbatim, hidden or not: asking for a token by id *is* the
+      // request for it. `includeHidden` governs only the "everything on the scene" path below.
+      const byId = new Map(allTokens.map((t: any) => [t.id, t]));
+      tokenDocs = [];
+      for (const id of data.tokenIds) {
+        const found = byId.get(id);
+        // Report unknown ids rather than silently shrinking the matrix.
+        if (found) tokenDocs.push(found);
+        else notFound.push(id);
+      }
     } else {
-      // Default: all visible (non-hidden) tokens
-      tokenDocs = tokenDocs.filter((t: any) => !t.hidden);
+      tokenDocs = includeHidden ? allTokens : allTokens.filter((t: any) => !t.hidden);
     }
 
     if (tokenDocs.length < 2) {
       return {
         success: true,
         distances: [],
+        ...(notFound.length > 0 ? { notFound } : {}),
         message:
           tokenDocs.length === 0
             ? 'No matching tokens found.'
@@ -7762,18 +7792,29 @@ export class FoundryDataAccess {
       };
     }
 
-    // measurePath needs canvas placeables for their center points, not TokenDocuments
-    const canvasTokens: any[] = (canvas as any).tokens?.placeables ?? [];
-    const canvasById = new Map(canvasTokens.map((t: any) => [t.id, t]));
-    const grid = (canvas as any).grid;
+    // `getCenterPoint()` returns an ElevatedPoint {x, y, elevation}: x/y in pixels, elevation
+    // already in grid units. Supplying elevation is what selects `measurePath`'s 3D overload
+    // (BaseGrid#getOffset only sets `k` when `coords.elevation !== undefined`). When both
+    // tokens share an elevation the 3D result is arithmetically identical to the old 2D one.
+    const centers = new Map<string, any>();
+    const missingElevation: string[] = [];
+    for (const t of tokenDocs) {
+      const center = t.getCenterPoint();
+      if (typeof center.elevation !== 'number') {
+        // A mixed 2D/3D waypoint pair yields NaN rather than an error, so normalise — but say
+        // so, instead of letting a schema miss read as an honest "on the ground".
+        missingElevation.push(t.name ?? t.id);
+        center.elevation = 0;
+      }
+      centers.set(t.id, center);
+    }
 
     const distances: Array<{
       from: string;
       fromId: string;
       to: string;
       toId: string;
-      feet: number;
-      measurement: string;
+      distance: number;
     }> = [];
 
     for (let i = 0; i < tokenDocs.length; i++) {
@@ -7781,40 +7822,48 @@ export class FoundryDataAccess {
         const a = tokenDocs[i];
         const b = tokenDocs[j];
 
-        const aCanvas = canvasById.get(a.id);
-        const bCanvas = canvasById.get(b.id);
-
-        let feet = 0;
-        let measurement: string;
-        if (aCanvas && bCanvas && grid) {
-          // Grid-aware measurement: honours the scene's diagonal rules. `measurePath`
-          // is the supported API on v12-v14 (`measureDistance` was removed in v14).
-          feet = grid.measurePath([aCanvas.center, bCanvas.center]).distance;
-          measurement = 'grid';
-        } else {
-          // Canvas not rendered: fall back to raw euclidean pixel math. This ignores the
-          // grid's diagonal rules, so it can disagree with the branch above on a diagonal.
-          const gridSize: number = scene.grid?.size ?? 100;
-          const gridDistance: number = scene.grid?.distance ?? 5;
-          const dx = a.x + (a.width * gridSize) / 2 - (b.x + (b.width * gridSize) / 2);
-          const dy = a.y + (a.height * gridSize) / 2 - (b.y + (b.height * gridSize) / 2);
-          const pixelDist = Math.sqrt(dx * dx + dy * dy);
-          feet = (pixelDist / gridSize) * gridDistance;
-          measurement = 'euclidean-fallback';
-        }
+        // `measurePath` is the supported API on v12-v14 (`measureDistance` was removed in v14).
+        const measured = grid.measurePath([centers.get(a.id), centers.get(b.id)]).distance;
 
         distances.push({
           from: a.name ?? a.id,
           fromId: a.id,
           to: b.name ?? b.id,
           toId: b.id,
-          feet: Math.round(feet),
-          measurement,
+          // 2dp rather than integers: EXACT/APPROXIMATE diagonals produce fractional results
+          // that rounding to a whole unit would hide. Alternating rules stay integral anyway.
+          distance: Math.round(measured * 100) / 100,
         });
       }
     }
 
-    return { success: true, units: scene.grid?.units ?? 'ft', distances };
+    // Name the diagonal rule so a surprising number is explainable (PF2e's alternating rule puts
+    // a 3-square diagonal at 20 ft where Chebyshev says 15). Derived by inverting the constant
+    // rather than hardcoded, so it cannot drift; an unmatched value reports raw, never a guess.
+    let diagonals: string | number | undefined;
+    if (typeof grid.diagonals === 'number') {
+      const table = (globalThis as any).CONST?.GRID_DIAGONALS ?? {};
+      diagonals = Object.keys(table).find(k => table[k] === grid.diagonals) ?? grid.diagonals;
+    }
+
+    return {
+      success: true,
+      units: grid.units ?? scene.grid?.units ?? 'ft',
+      measurement: 'grid',
+      ...(diagonals !== undefined ? { diagonals } : {}),
+      ...(notFound.length > 0 ? { notFound } : {}),
+      ...(missingElevation.length > 0 ? { missingElevation } : {}),
+      // Reported once rather than per pair: N tokens make N(N-1)/2 rows, and elevation plus
+      // hidden state are per token. `hidden` is always visible here, so an included ambusher
+      // is never a surprise.
+      tokens: tokenDocs.map((t: any) => ({
+        id: t.id,
+        name: t.name ?? t.id,
+        elevation: t.elevation,
+        hidden: !!t.hidden,
+      })),
+      distances,
+    };
   }
 
   /**

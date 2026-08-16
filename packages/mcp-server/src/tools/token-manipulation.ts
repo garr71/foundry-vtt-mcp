@@ -183,8 +183,10 @@ export class TokenManipulationTools {
         description:
           'Calculate distances in scene units (typically feet) between tokens on the current scene using the scene grid. ' +
           'Returns a distance matrix for all token pairs, or only the requested subset. ' +
-          'Distances follow the grid measurement rules of the scene (including diagonal rules), ' +
-          'but are line-of-sight agnostic: walls and obstacles are not accounted for, and elevation is ignored.',
+          'Distances follow the grid measurement rules of the scene (including diagonal rules) and account for each ' +
+          "token's elevation, so a flying creature reads as further away than the ground beneath it. " +
+          'Line-of-sight agnostic: walls and obstacles are not accounted for. ' +
+          'The response reports the diagonal rule in force, and lists every measured token with its elevation and hidden state.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -192,7 +194,15 @@ export class TokenManipulationTools {
               type: 'array',
               items: { type: 'string' },
               description:
-                'Optional list of token IDs to include. Omit to include all visible tokens on the scene.',
+                'Optional list of token IDs to include. Omit to include every token on the scene. ' +
+                'IDs are honoured verbatim, including hidden tokens; any ID not on the scene comes back under "notFound".',
+            },
+            includeHidden: {
+              type: 'boolean',
+              description:
+                'Include tokens hidden from players. Defaults to true — hidden tokens are often the ambushers a GM ' +
+                'most wants a distance to, and each token reports its own hidden flag in the response. ' +
+                'Only applies when tokenIds is omitted.',
             },
           },
         },
@@ -459,14 +469,20 @@ export class TokenManipulationTools {
   async handleGetTokenDistances(args: any): Promise<any> {
     const schema = z.object({
       tokenIds: z.array(z.string()).optional(),
+      // Default lives here so the control-port probe reads it back, and so a no-argument call
+      // proves the default rather than merely restating it. Must agree with data-access.ts.
+      includeHidden: z.boolean().optional().default(true),
     });
 
-    const { tokenIds } = schema.parse(args);
+    const { tokenIds, includeHidden } = schema.parse(args);
 
-    this.logger.info('Getting token distances', { tokenIds });
+    this.logger.info('Getting token distances', { tokenIds, includeHidden });
 
     try {
-      return await this.foundryClient.query('foundry-mcp-bridge.getTokenDistances', { tokenIds });
+      return await this.foundryClient.query('foundry-mcp-bridge.getTokenDistances', {
+        tokenIds,
+        includeHidden,
+      });
     } catch (error) {
       this.logger.error('Failed to get token distances', error);
       throw new Error(
