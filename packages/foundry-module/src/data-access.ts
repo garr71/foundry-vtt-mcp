@@ -10618,32 +10618,52 @@ export class FoundryDataAccess {
     this.validateFoundryState();
 
     const query = request.journal.toLowerCase();
-    const allJournals = game.journal?.contents || [];
+    const allJournals = (game.journal?.contents || []) as any[];
 
-    const entry = allJournals.find(
-      (j: any) =>
-        j.id === request.journal ||
-        j.name?.toLowerCase() === query ||
-        j.name?.toLowerCase().includes(query)
-    ) as any;
+    // Exact matches resolved in their own passes, id first. The old single `find()` OR-ed
+    // id / exact-name / substring into one predicate, so the first entry matching ANY clause
+    // won and collection order decided the result — a journal named "Rites" loses to "Rites of
+    // the Gyve" whenever the latter sorts earlier. Cycle 3 proved this is not theoretical: the
+    // identical pattern really did resolve the sound "Docks" to "Docks Nighttime".
+    const exactEntry =
+      allJournals.find((j: any) => j.id === request.journal) ??
+      allJournals.find((j: any) => j.name?.toLowerCase() === query);
+    const entryPartial = exactEntry
+      ? []
+      : allJournals.filter((j: any) => j.name?.toLowerCase().includes(query));
+    const entry = exactEntry ?? entryPartial[0];
 
     if (!entry) {
       throw new Error(`Journal entry not found: "${request.journal}"`);
     }
 
+    // Returned, not thrown: ErrorHandler.handleToolError erases thrown messages, so a
+    // "your query matched several" diagnostic only survives in the success payload.
+    const journalAmbiguousWith =
+      entryPartial.length > 1 ? entryPartial.map((j: any) => j.name) : undefined;
+
     // If a page is specified, find it and show only that page
     if (request.page) {
       const pageQuery = request.page.toLowerCase();
-      const page = (entry.pages?.contents || []).find(
-        (p: any) =>
-          p.id === request.page ||
-          (p.name ?? '').toLowerCase() === pageQuery ||
-          (p.name ?? '').toLowerCase().includes(pageQuery)
-      );
+      const allPages = (entry.pages?.contents || []) as any[];
+
+      // Same exact-first split as the journal lookup above. Page names collide far more often
+      // than journal names ("Summary" vs "Summary of Events"), so this is the likelier of the two
+      // to bite in practice.
+      const exactPage =
+        allPages.find((p: any) => p.id === request.page) ??
+        allPages.find((p: any) => (p.name ?? '').toLowerCase() === pageQuery);
+      const pagePartial = exactPage
+        ? []
+        : allPages.filter((p: any) => (p.name ?? '').toLowerCase().includes(pageQuery));
+      const page = exactPage ?? pagePartial[0];
 
       if (!page) {
         throw new Error(`Page "${request.page}" not found in journal "${entry.name}".`);
       }
+
+      const pageAmbiguousWith =
+        pagePartial.length > 1 ? pagePartial.map((p: any) => p.name) : undefined;
 
       // Pass the page document directly — Foundry opens it in single-page mode
       await (game as any).journal.constructor.show(page, { force: true });
@@ -10655,6 +10675,8 @@ export class FoundryDataAccess {
         journalName: entry.name,
         pageId: page.id,
         pageName: page.name,
+        ...(journalAmbiguousWith ? { journalAmbiguousWith } : {}),
+        ...(pageAmbiguousWith ? { pageAmbiguousWith } : {}),
       };
     }
 
@@ -10666,6 +10688,7 @@ export class FoundryDataAccess {
       message: `Showing journal "${entry.name}" to all players.`,
       journalId: entry.id,
       journalName: entry.name,
+      ...(journalAmbiguousWith ? { journalAmbiguousWith } : {}),
     };
   }
 
