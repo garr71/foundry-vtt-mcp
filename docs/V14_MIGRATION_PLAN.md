@@ -1666,6 +1666,17 @@ violate strategy decision 4 while looking like compliance.
 
 **Entry condition:** Phase 6 complete — fork whole, promoted, every core tool proven.
 
+> **Scope decision, 2026-08-15 (Franklin).** Run **7d first and alone**. Simple Quest (7a **and**
+> 7b) is deferred until it gets its own analysis and plan, because 5.1.4 differs from 3.0.20 far
+> more than a re-port assumes — the same reasoning that created this phase. 7c is **parked on a
+> prerequisite**, see below. The `getJournalPageContent` reader fix stays with 7a: it is listed on
+> 7a's checklist and its only fixture and consumer are Simple Quest pages. It has standalone value
+> (`pf2e-bestiary-tracking` ships custom page subtypes that read as `""` for the same reason), so
+> it can be pulled forward as its own cycle on request.
+>
+> 7d ordering, by live-session value against risk: `get-token-distances` → `read-chat` speaker →
+> playlists → `show-journal-to-players` → `rollMode` → pf2e adapter. One deploy cycle each.
+
 #### 7a — Simple Quest, rebuilt against 5.1.4
 
 - [ ] `set-quest-checklist-item` — new key derivation + `system.objectiveState` storage
@@ -1704,51 +1715,405 @@ parent-child auto-checking, and player-toggleable objectives over a socket.
 Typed fields are a far better fit for an MCP assistant than string-munging prose — "mark the quest
 failed", "set the deadline" become typed writes. **Logged as opportunity, not commitment.**
 
-#### 7c — Other module-dependent backlog
+#### 7c — Other module-dependent backlog ⛔ BLOCKED (2026-08-15)
 
 - [ ] Exalted Scenes + Narrator's Jukebox tools (5 tools; guard with `game.modules.get(id)?.active`)
 - [ ] Re-verify any remaining module assumption inherited from the sf2e era
+
+> **⛔ Neither module is installed in the v14 world.** Enumerated
+> `D:\FoundryData-Paizo\Data\modules` on 2026-08-15: 33 modules, of which `simple-quest` is the
+> only one this phase depends on. Exalted Scenes and Narrator's Jukebox were **sf2e-era wants that
+> did not survive the pf2e pivot**, and they were carried into this backlog without anyone checking
+> whether they were still installed.
+>
+> There is therefore **no test target**, so 7c cannot be gated — and a gate that cannot fail is not
+> a gate. Franklin's call: **keep parked, install later.** Do not write these five tools until the
+> modules are installed and their installed source has been read, per the standing rule.
+>
+> Generalise the check: this is the second backlog item found to be describing a world that no
+> longer exists. **Confirm a module is installed before scheduling work against it.**
 
 #### 7d — Non-module items parked for the same reason
 
 Not module-dependent, but each is a **re-derive** rather than a re-port, so they wait for the same
 strategy-decision-4 reason:
 
-- [ ] **Server-side modifier hoist** — move roll-modifier lookup into the system adapters instead of
-      the module-side `isPF2eFamily` chain (deferred from Phase 1.5)
-- [ ] **`get-character` never reports initiative** — upstream pf2e adapter gap found in the Phase
-      1.5 gate; leaves initiative with no server-side cross-check
-- [ ] **`Roll#toMessage` `rollMode` → `messageMode`** — v14 deprecation, breaks on v16
-- [ ] **`read-chat`'s `speaker` hides "no speaker"** — the formatter's `?? msg.author` makes a
-      message with no speaker indistinguishable from one spoken by its author. Faithful to `master`,
-      but it defeated the Phase 2 gate fixture. Emit the speaker as nullable and let the caller
-      decide, rather than silently substituting.
-- [ ] **`list-playlists` reports raw volume, not UI volume** — `Math.round(s.volume * 100)` on the
-      internal value, so a track at 0.5 reads `"50%"` while Foundry's slider shows 63%. Decide
-      whether to report the UI percentage (matches what you see, but then read and write use
-      different scales) or to report both. Found in Phase 3.
-- [ ] **Hidden tokens: the two tools now disagree by default** — `get-current-scene` includes them
-      (Phase 4 rows 1-2), `get-token-distances` excludes them (faithful to `master`). Recorded at
-      the Phase 4 gate, where the hidden token was also the dead one. Ambushers and lurkers are
-      arguably the tokens a GM most wants a distance to, so consider an `includeHidden` parameter
-      on the distance tool rather than silently dropping them.
-- [ ] **`get-token-distances` returns a field literally named `feet`** alongside a `units` field
-      reporting the scene's real unit. Correct on this world (`units: "ft"`), misleading on a scene
-      in metres. Rename to `distance`, or keep both and document the unit.
-- [ ] **`get-token-distances` ignores elevation** — v14's `measurePath` accepts 3D waypoints with an
-      `elevation` field, but we pass 2D centers, so a flying creature 20 ft up measures as adjacent.
-      Found in Phase 4. Using the 3D overload is new work, not a re-port.
-- [ ] **The distance fallback branch uses different math from the primary one** — euclidean pixels
-      vs. grid rules, so the two disagree on diagonals. Currently only distinguishable by the
-      `measurement` field in the response. Either make the fallback grid-aware or drop it.
-- [ ] **Exact-match lookups lose to substring matches** — `findPlaylist`, the sound lookup in
-      `playPlaylist`, and the journal + page lookups in `showJournalToPlayers` all OR their clauses
-      inside one `find()` predicate, so the first element matching _any_ clause wins and collection
-      order decides. Split exact matching into a prior pass, as `sendChatMessage` already does.
-      Four call sites, Phases 2-3. Latent today. Found in Phase 3.
-- [ ] **`stop-playlist` on a named playlist returns no count** — it reports `Stopped playlist "X"`
-      whether or not anything was playing, while the stop-everything branch returns `stopped: N`.
-      Give the named path the same count so the success string is falsifiable. Found in Phase 3.
+- [ ] ⏸️ **Server-side modifier hoist** — move roll-modifier lookup into the system adapters instead
+      of the module-side `isPF2eFamily` chain (deferred from Phase 1.5). **Parked 2026-08-15.**
+- [ ] ⏸️ **`get-character` never reports initiative** — upstream pf2e adapter gap found in the Phase
+      1.5 gate. **Parked 2026-08-15.**
+
+> **Cycle 6 parked, 2026-08-15 (Franklin).** Both items above, together. His challenge was the
+> right one: _"in actual play, why would `get-character` need to report initiative? We have
+> `get-combat-tracker` and that's where initiative lives."_ Checking rather than arguing:
+>
+> - `getActiveCombat` already returns `initiative` and `hasRolledInitiative` per combatant,
+>   initiative-sorted (`data-access.ts` L10737). That is the **rolled** value — what play needs.
+> - `buildRollFormula` already resolves the initiative **modifier** module-side
+>   (`data-access.ts` L5876): `attributes.initiative` → perception → dex, with
+>   `warnOnMissingModifier` on a miss. That is the Phase 1.5 fix, and it is the code that
+>   actually rolls.
+>
+> So the only real absence is an initiative entry in the **server-side** pf2e adapter — which
+> matters only if that adapter were authoritative, and it is not, because `buildRollFormula`
+> never consults it. **The two items are therefore coupled**: the adapter entry has value only if
+> the hoist lands first. Neither delivers observable behaviour alone, and together they are a
+> refactor whose gate is "nothing changed" — the weakest kind. Not wrong, just not in the same
+> queue as live defects.
+>
+> **A false lead, recorded so it is not re-followed.** A `get-character "Amiri"` call failed with
+> `Character not found` and was briefly taken as the known unlinked-token limitation. It was not:
+> the actor is named `Amiri (Level 1)` and resolves correctly under its full name. `game.actors`
+> lookup is fine. What the episode _did_ surface is that `get-character` matches names **exactly**
+> — no substring pass — so the natural table query "Amiri" misses. The exact-first pattern from
+> cycles 3-4 would fix that without reintroducing the ambiguity those cycles removed. Logged as a
+> candidate, not adopted.
+
+- [x] **`Roll#toMessage` `rollMode` → `messageMode`** — and it was **not** a deprecation. Cycle 5
+      of 7d, 2026-08-15.
+
+> **Cycle 5 of 7d, 2026-08-15 — ✅ GATE PASSED. The backlog had the severity wrong.**
+>
+> Filed as "v14 deprecation, breaks on v16 / console noise until fixed." Reading the installed
+> source shows **every private roll button has been failing outright on v14**:
+>
+> ```js
+> // client/dice/roll.mjs L1155
+> static _mapLegacyRollMode(rollMode) {
+>   if ( rollMode === "roll" ) return game.settings.get("core", "messageMode");
+>   return {publicroll:"public", gmroll:"gm", blindroll:"blind", selfroll:"self"}[rollMode] || rollMode;
+> }
+> ```
+>
+> We passed `rollMode: isPublic ? 'publicroll' : 'whisper'`. **`'whisper'` was never a valid
+> rollMode** — not in that map, so it passed through unmapped to `ChatMessage#applyMode`, where
+> `CONFIG.ChatMessage.modes['whisper']` is `undefined` and reading `cfg.handler` throws.
+> `CONFIG.ChatMessage.modes` holds exactly `public / gm / blind / self / ic` (`client/config.mjs`
+> L246-266), and pf2e only ever _reads_ that object — it throws `Unexpected message-visibility
+mode` on unknown keys rather than adding one.
+>
+> The click handler wraps the call in `try/catch`, so it surfaced as
+> `ui.notifications.error('Failed to execute roll')` with the button re-enabled — **no roll
+> posted, no stack trace shown**. A broken feature that read as a transient glitch. `isPublic` is
+> a _required_ parameter on `request-player-rolls`, so this is a first-class path.
+>
+> Fixed to `messageMode: isPublic ? 'public' : 'gm'`. **`'gm'`, not `'blind'`:** `applyMode`
+> substitutes the all-GMs whisper list only when `chatData.whisper` is **empty**, and the handler
+> always populates `whisperTargets` (target user + active GMs), so the explicit recipients survive
+> and `blind` stays false. `'blind'` would hide the result from the player who rolled it.
+> `publicroll` → `public` is behaviour-preserving: exactly what `_mapLegacyRollMode` did.
+>
+> **The bundled type declarations still describe the pre-v14 signature** and know only `rollMode`,
+> so the call needs a cast. The installed `roll.mjs` L926 is the authority, not the types — a case
+> where a clean typecheck argued _for_ keeping the broken code.
+>
+> **Gate — every participating browser must be refreshed.** The click handler runs in the
+> _clicking_ user's browser, so the player's client needs the F5 as much as the GM's; testing from
+> a stale player client reproduces the old failure and looks like the fix did not land.
+>
+> 1. Private roll (`isPublic: false`) → player clicks → **roll posts**, whispered to that player
+>    - GMs. Before: `Failed to execute roll`, nothing posted.
+> 2. Public roll (`isPublic: true`) → still posts to everyone. The control: `publicroll` already
+>    worked, so a fix that broke it would otherwise go unnoticed.
+>
+> ##### Gate result, 2026-08-15 — passed, both halves
+>
+> Both buttons issued over the control port, clicked by the player, verified by reading chat back
+> rather than by trusting the UI:
+>
+> |         | `author` | `speaker`         | roll            | `whisper`  |
+> | ------- | -------- | ----------------- | --------------- | ---------- |
+> | Private | `Dragor` | `Amiri (Level 1)` | `1d20 + 5` = 21 | **`true`** |
+> | Public  | `Dragor` | `Amiri (Level 1)` | `1d20 + 5` = 17 | _(absent)_ |
+>
+> The private roll **posted at all**, which it could not do before — the throw happened inside
+> `toMessage`, so nothing was ever created. And it posted _whispered_ while the public control
+> posted unwhispered, so `messageMode: 'gm'` preserved the explicit recipient list rather than
+> being ignored or overwritten.
+>
+> Two unrelated confirmations came free: the `+5` shows the Phase 1.5 pf2e modifier fix is intact
+> (this path used to roll a bare `1d20 + 0`), and `author: "Dragor"` against `speaker: "Amiri
+(Level 1)"` is cycle 2's author/speaker independence holding on a real message.
+>
+> **One gap in the evidence:** `getRecentChat` reduces `whisper` to a boolean
+> (`(msg.whisper || []).length > 0`), so the log cannot show _who_ was whispered to. That the
+> player saw his own private result was confirmed at the table, not from the payload. If the
+> recipient list ever needs proving, the reduction to boolean is what stands in the way — a
+> candidate 7d item in its own right.
+
+- [x] **`read-chat`'s `speaker` hides "no speaker"** — `author` and `speaker` are now reported
+      independently and either may be null. Cycle 2 of 7d, 2026-08-15.
+
+> **Cycle 2 of 7d, 2026-08-15 — ✅ GATE PASSED.** The listed defect was one line
+> ([`chat.ts`](../packages/mcp-server/src/tools/chat.ts) `?? msg.author`), but fixing only that
+> line would not have worked — **the same merge happens twice on the same path**, which is the
+> Phase 2 lesson ("a downstream `?? default` can re-merge the two fields the test was built to
+> separate") pointing at its own cause:
+>
+> 1. **Server formatter** — `speaker: … ?? msg.author`. A message with no speaker read as one
+>    spoken by its author. Now `null`.
+> 2. **Module, `author`** — `msg.author?.name ?? speaker.alias ?? 'Unknown'`. When the User could
+>    not be resolved this substituted the _speaker's_ alias, so `author` and `speaker` collapsed
+>    to the same value **before** the formatter ever ran. Fixing only (1) would have left the two
+>    fields merged whenever the author lookup missed. Now `null`.
+> 3. **Module, `speaker.actor`** — `game.actors.get(id)?.name ?? speaker.alias`. A deleted or
+>    foreign actor id resolved to the alias, so a lookup that **missed** read exactly like one
+>    that succeeded. Now `null`, with the raw id surfaced as `unresolvedActorId` only when the
+>    lookup actually fails, so the miss is visible rather than disguised.
+>
+> Items 2 and 3 were not on the backlog. Both are the canonical trap, found by reading the whole
+> path from source field to printed output instead of the one line the item named.
+>
+> **Blank is not absent.** `speaker.alias` is a `StringField` with `blank: true`
+> (`common/documents/chat-message.mjs` L58), so a message created with no speaker stores `""`,
+> not `null` — and `??` does not catch the empty string. A first pass that only swapped the
+> fallback to `?? null` would have printed a blank speaker instead of a visible absence. Blank
+> and whitespace-only aliases are normalised to `null`.
+>
+> **Gate — needs both halves, because nulling everything passes the first one:**
+>
+> | Fixture                                                            | `author` | `speaker`      |
+> | ------------------------------------------------------------------ | -------- | -------------- |
+> | Console `ChatMessage.create({content: "…"})` — no speaker recorded | user     | **`null`**     |
+> | Chat typed with a token selected — actor speaker recorded          | user     | **actor name** |
+>
+> The first proves the substitution is gone (it read as the user's name before). The second proves
+> a real speaker still resolves — without it, a fix that returned `null` unconditionally would
+> pass. Note that plain chat typed with **no** token selected legitimately carries an alias:
+> `ChatMessage.getSpeaker()` fills it from `user.name` (`#getSpeakerFromUser`), so Foundry really
+> did record a speaker there and reporting it is correct. Only a message with no speaker _stored_
+> reads null.
+>
+> ##### Gate result, 2026-08-15 — passed, both halves
+>
+> | Message                                  | `author`     | `speaker`  |
+> | ---------------------------------------- | ------------ | ---------- |
+> | `U5B7…` console-created, no speaker      | `Gamemaster` | **`null`** |
+> | `Cqae…` typed with a token selected      | `Gamemaster` | `Amiri`    |
+> | `WjO2…` sent via `send-chat-message`     | `Gamemaster` | `Amiri`    |
+> | `hqMp…` / `0RWt…` GM narration + whisper | `Gamemaster` | `GM`       |
+>
+> `author` held constant at `Gamemaster` across all five while `speaker` took three distinct
+> values including null — the two fields are demonstrably independent, which is the whole point.
+> Under the old code `U5B7…` would have read `speaker: "Gamemaster"`, identical to its author and
+> indistinguishable from a message the GM really did speak as themselves.
+>
+> No `unresolvedActorId` appeared, as expected on a world with no deleted actors — branch 3 above
+> remains **unexercised**. It is a strict improvement over substituting the alias, but it has not
+> been proven live, and per the standing rule a passing happy path does not test the branch it did
+> not take. Exercising it needs a message whose speaker actor is deleted afterwards.
+
+- [x] **`list-playlists` reports raw volume, not UI volume** — resolved by reporting **both**,
+      each named for its scale. Cycle 3 of 7d, 2026-08-15.
+- [x] **Hidden tokens: the two tools now disagree by default** — resolved with an `includeHidden`
+      parameter **defaulting to `true`**, matching `get-current-scene`. Explicit `tokenIds` are
+      honoured verbatim regardless, and every token reports its own `hidden` flag, so an included
+      ambusher is visible in the response rather than a silent extra row.
+- [x] **`get-token-distances` returns a field literally named `feet`** — renamed to `distance`,
+      with `units` still reporting the scene's real unit.
+- [x] **`get-token-distances` ignores elevation** — now 3D.
+- [x] **The distance fallback branch uses different math from the primary one** — **deleted**
+      rather than made grid-aware. See below: nothing in this tool ever needed the canvas.
+
+> **Cycle 1 of 7d, 2026-08-15 — ✅ GATE PASSED.** All four items collapsed into one
+> rewrite once the installed core source was read (`common/grid/base.mjs`, `square.mjs`,
+> `gridless.mjs`, `common/documents/token.mjs`, `client/documents/scene.mjs`):
+>
+> - **`TokenDocument#getCenterPoint()` already returns an `ElevatedPoint`** — `{x, y, elevation}`,
+>   x/y in pixels and **elevation already in grid units**, not pixels. That last detail is the one
+>   that would have shipped broken: `square.mjs:_measurePath` divides dx/dy by `grid.size` but dz
+>   by `grid.distance`. It also handles hex shapes, which the old pixel math did not.
+> - **Supplying `elevation` is what selects the 3D overload.** `BaseGrid#getOffset` sets `k` only
+>   when `coords.elevation !== undefined`, and `_measurePath` branches on `o0.k !== undefined`.
+>   With both tokens at the same elevation the 3D result is arithmetically identical to the old 2D
+>   one, so the change is a strict addition. **Mixed 2D/3D waypoints yield `NaN`, not an error**,
+>   so a non-numeric elevation is normalised _and reported_ under `missingElevation`.
+> - **`scene.grid` is a real `BaseGrid` instance,** not the grid config — `Scene.#prepareGrids`
+>   replaces it (`scene.mjs` L409/L430). So `scene.grid.measurePath()` works with the canvas
+>   unrendered, and the fallback had no reason to exist. **Both** grid classes handle 3D.
+> - **Bonus defect, not on the list:** the old code drew tokens from `game.scenes.current` (the
+>   _active_ scene) but measured with `canvas.grid` (the _viewed_ scene's). Viewing any other scene
+>   measured the active scene's tokens against the wrong grid — or dropped to the fallback, since
+>   `canvas.tokens.placeables` held the wrong scene's tokens. Both paths are gone.
+> - Response now reports the **diagonal rule by name**, derived by inverting `CONST.GRID_DIAGONALS`
+>   at runtime rather than hardcoding it — an unmatched value reports raw instead of guessing — and
+>   lists each token's `elevation` and `hidden` once, rather than widening N(N-1)/2 pair rows.
+>   Unknown ids come back under `notFound` instead of silently shrinking the matrix.
+> - Distances now carry 2dp. `EXACT`/`APPROXIMATE` diagonals are fractional and integer rounding
+>   hid that; alternating rules stay integral, so PF2e output is unchanged.
+>
+> **Gate:** call with **no arguments** (proves `includeHidden` defaults true, per the standing rule
+> that passing the value explicitly passes on the old code too). Fixture needs a **hidden** token
+> and a token at **non-zero elevation**, with a pair whose candidate explanations give different
+> numbers. On a 5 ft square grid, a flyer **20 ft up and 15 ft away in a straight line** (so 3
+> squares horizontal, 4 squares of elevation, no horizontal diagonal to confound it):
+>
+> | Reading                                     | Result    |
+> | ------------------------------------------- | --------- |
+> | 3D, alternating diagonals (PF2e / this fix) | **25 ft** |
+> | elevation still ignored (the old behaviour) | 15 ft     |
+> | 3D, rectilinear                             | 35 ft     |
+> | 3D, equidistant (Chebyshev)                 | 20 ft     |
+>
+> Worked from `square.mjs:_measurePath`: the offsets sort to `di=4, dj=3, dk=0`, and alternating
+> gives `di + floor(nd/2)` = `4 + 1` = 5 squares = 25 ft. Four candidate explanations, four
+> distinct numbers — no reading of the fixture is ambiguous.
+
+##### Gate result, 2026-08-15 — passed on a live pf2e scene
+
+Six tokens, `Sarcovalt` flying at **elevation 15** (3 squares), the rest on the ground; one
+`Chelaxian Recruit` hidden. Scene reported `units: "ft"`, `measurement: "grid"`,
+`diagonals: "ALTERNATING_1"`. Called with **no arguments** both times.
+
+Run 1 at elevation 15, run 2 with Sarcovalt set to elevation 0 and **not moved**:
+
+| Pair with Sarcovalt | elev 15 | elev 0 | horizontal `dx, dy` that explains both |
+| ------------------- | ------- | ------ | -------------------------------------- |
+| "Rabbit" Dryden     | 20      | 10     | `2, 0`                                 |
+| Recruit `6Tow…`     | 26.25   | 21.25  | `4.25, <1`                             |
+| Recruit `F2PH…` 🕵  | 20      | 16.25  | `3, 1.25`                              |
+| Amiri               | 21.25   | 16.25  | `3.25, <1`                             |
+| Ezren               | 20      | 11.25  | `2.25, 0`                              |
+
+**All ten values recomputed by hand** through the `ALTERNATING_1` branch
+(`l1 = a0(1-mx) + a1(mx-my) + a2(my-mz) + a3·mz`, `a = fx + 0.5·fy + 0.25·fz`), and **a single
+fixed horizontal geometry explains every one of them**. That is the real strength of this gate:
+not that the numbers changed, but that one unmoved `(x, y)` per token reconciles both runs, which
+rules out "the token moved" as the explanation. Every one of the ten pairs **not** involving
+Sarcovalt held byte-identical across runs.
+
+Worth keeping: the naive decomposition `dy = 0` fits four of the five pairs and **fails on
+`F2PH…`** — it predicts 21.25 where the tool returned 20. The correct `dx=3, dy=1.25` reproduces
+both runs exactly. A four-of-five fit looked like a tool bug and was an arithmetic error in the
+_check_. Solve the decomposition from both runs jointly before calling a mismatch a defect.
+
+Also confirmed: `includeHidden` defaulted true (the hidden recruit appears with `hidden: true`
+under a no-argument call), no `feet` key anywhere, and `notFound` / `missingElevation` correctly
+**absent** rather than present-and-empty.
+
+The quarter-square offsets are themselves evidence: they come from `getCenterPoint()` centring a
+token by its own size, which is why fractional distances persist at elevation 0.
+
+> **⚠️ Evidence-handling note.** The pasted run-2 payload listed **16 rows for 15 pairs**, with
+> `Amiri ↔ Sarcovalt` duplicated. `getTokenDistances` iterates `for i; for j = i + 1`, which
+> structurally cannot emit a duplicate pair — so the payload was **reproduced by the assistant
+> rather than pasted verbatim**. The values themselves all verified, so nothing was lost here, but
+> a retyped payload is weaker evidence than a copied one. Add to the gate-design rules: when a
+> response is the evidence, copy it, do not let a model retype it.
+
+- [x] **Exact-match lookups lose to substring matches** — all 4 call sites done. `findPlaylist`
+      and the `playPlaylist` sound lookup in cycle 3; the journal + page lookups in
+      `showJournalToPlayers` in cycle 4.
+
+> **Cycle 4 of 7d, 2026-08-15 — ✅ GATE PASSED.** Same exact-first split as cycle 3, applied to
+> the journal and page lookups, with `journalAmbiguousWith` / `pageAmbiguousWith` **returned**
+> rather than thrown. Module-only change — no server code touched, so no backend or Claude Desktop
+> restart, just an F5.
+>
+> **This was never latent.** The backlog recorded these four call sites as "latent today". They
+> were not: the defect reproduces on the campaign's real data, and reproduces _destructively_,
+> because `show-journal-to-players` pushes to every connected client. Identical call, before and
+> after the module refresh:
+>
+> |            | `journalName`                 | `pageName`             | `journalId`        |
+> | ---------- | ----------------------------- | ---------------------- | ------------------ |
+> | **Before** | `Ch 3: Devils of Chitterwood` | `Into the Chitterwood` | `pf2ap22203devils` |
+> | **After**  | `Chitterwood`                 | `Chitterwood`          | `pf2ap22212chitte` |
+>
+> The world holds a journal named exactly `Chitterwood`, but `Ch 3: Devils of Chitterwood` sorts
+> earlier and contains the string, so the OR-ed predicate took it — then searched _that_ journal's
+> pages and pushed a page nobody asked for to the players. Note the **id** changes, not just the
+> name: a different document, per "fixture identity is part of the evidence".
+>
+> A scan of all 28 journals found **nine** such collisions in this campaign (`Wolfpoint` →
+> `Wolfpoint Palisade`, `Sabotage` → `Mission 2: Armory Sabotage`, `Sarcovalt` → `Sarcovalt
+Swarm`, `Hellknight` → `Skeletal Hellknight`, …). Worth generalising: **"latent" should mean
+> "no fixture can reach it", not "nobody has hit it yet".** Scanning the live data for a
+> discriminating pair took one script and converted a theoretical item into a reproducible bug.
+>
+> **Unexercised:** `journalAmbiguousWith` / `pageAmbiguousWith`. An exact match short-circuits
+> before the partial pass, so the passing fixture cannot also produce them. The pattern is proven
+> at the playlist call sites (cycle 3), but this is different code.
+>
+> **Process note:** the before-shot pushed adventure text to a connected player without warning
+> Franklin first. A gate for a tool whose whole purpose is broadcasting to players is
+> player-visible by definition — say so before running it, not after.
+
+- [x] **`stop-playlist` on a named playlist returns no count** — both branches now report
+      `stopped` (playlists) and `stoppedSounds`. Cycle 3 of 7d, 2026-08-15.
+
+> **Cycle 3 of 7d, 2026-08-15 — ✅ GATE PASSED.**
+>
+> **Volume: the plan's claim was right, and verified this time by reading the render path.**
+> `playlist-directory.mjs` L404/L414 renders `volumeToPercentage(volumeToInput(volume))` — note the
+> **nesting**. `volumeToPercentage` on its own is just `volume * 100`, so reading only that helper
+> would have "disproved" the claim; the sidebar percentage is the _slider position_, and internal
+> 0.5 really does display as 63%. Resolved by reporting **both** scales, named: `volume` (internal,
+> and what `play-playlist` accepts back) and `volumePercent` (what the GM sees). Picking one would
+> have left read and write silently on different scales.
+>
+> The conversion delegates to `AudioHelper.volumeToInput` rather than reimplementing the 1.5
+> exponent, and returns **null** if the helper is missing — a guessed number would be
+> indistinguishable from a real reading. The `volume` param's own description already documented
+> the curve correctly, so only the read side was ever wrong.
+>
+> Also removed: `volume: s.volume ?? 0.5`, which made an absent volume indistinguishable from a
+> track really set to 0.5. Not on the backlog; same trap, found in passing.
+>
+> **Exact-match:** split into a prior pass, as `sendChatMessage` already did. An ambiguous
+> substring still resolves — behaviour preserved — but now **returns** `ambiguousWith` /
+> `soundAmbiguousWith` listing the other candidates. Deliberately not thrown:
+> `ErrorHandler.handleToolError` erases thrown messages, so a diagnostic has to be returned or the
+> caller never sees it (the Phase 5 lesson, applied rather than rediscovered).
+>
+> **Stop count:** counted _before_ `stopAll()`, and `stopped` now means playlists in **both**
+> branches so the unit does not change between them, with `stoppedSounds` alongside. A no-op stop
+> now says so instead of returning the same success string as a real one.
+>
+> **Gate — the write test must move the value and come back:**
+>
+> 1. `list-playlists`. Pick a track; note `volume` and `volumePercent`. They must **differ**
+>    (e.g. `0.5` / `"63%"`), and `volumePercent` must match the tooltip on Foundry's own slider.
+>    Equal values mean the nested conversion did not land.
+> 2. `stop-playlist` on a playlist that is **not** playing → `stopped: 0` and the "was not playing"
+>    message. Then play it and stop it again → `stopped: 1`, `stoppedSounds: ≥1`. Only the second
+>    half proves the count is real rather than hardcoded.
+> 3. Exact-match needs two playlists where one name is a prefix of the other (e.g. `Combat` and
+>    `Combat Ambience`) — ask for the **shorter** name and confirm the exact one plays regardless
+>    of sidebar order. Without such a pair the branch cannot fail and the test proves nothing.
+>
+> ##### Gate result, 2026-08-15 — passed, driven over the control port
+>
+> **The control port can call tools, not just list them** (`backend.ts` L1538, `method:
+'call_tool'`, `params: {name, args}`). Driving a gate through it removes Claude Desktop from the
+> loop entirely: exact arguments, verbatim responses, no retyped payload. This is the better
+> harness for any gate that does not need a human to _see_ something, and it is how cycle 3 was
+> run. Scratch client: `scratchpad/call.cjs`.
+>
+> | Check                                | Result                                  | Old behaviour              |
+> | ------------------------------------ | --------------------------------------- | -------------------------- |
+> | `list-playlists` volume scales       | `0.5`→`63%`, `0.35`→`50%`, `0.85`→`90%` | reported `50%`/`35%`/`85%` |
+> | stop a **not**-playing playlist      | `stopped: 0` + "was not playing"        | `Stopped playlist "X"`     |
+> | ambiguous query `"s"`                | `ambiguousWith: ["Loops","SFX"]`        | silent pick, no trace      |
+> | `play-playlist` sound `"Docks"`      | `sound: "Docks"`                        | **`"Docks Nighttime"`**    |
+> | stop the same playlist while playing | `stopped: 1`, `stoppedSounds: 1`        | no count at all            |
+>
+> **Finding a fixture that could fail took longer than the fix.** The obvious candidate — the
+> world's `Loops` / `Loops (Copy)` pair — is **not discriminating**: `Loops` precedes `Loops
+(Copy)` in collection order, so the old OR-predicate found the exact match first as well. Both
+> codepaths return `Loops`, and testing it would have produced a confident pass for a branch never
+> exercised. The real fixture was at the **sound** level, already present: in `Ambience`,
+> `Docks Nighttime` sits _before_ `Docks`, so the query `"Docks"` genuinely separates the two
+> implementations. Generalises: for an ordering bug, the fixture must put the **wrong** answer
+> earlier in the collection, which is a property of the data, not of the names.
+>
+> **Volume was verified by reading, not by testing** — the live `list-playlists` payload already
+> carried both scales and matched `volumeToInput` to the rounding. No world interaction needed.
+>
+> **Still unexercised:** `findPlaylist`'s own exact-vs-substring precedence. The world has no
+> playlist whose name is a substring of an earlier one, and the deleted `Loops (Copy)` would not
+> have discriminated anyway. The sound-level lookup proves the _pattern_, but it is a different
+> call site. Left as latent-but-unproven rather than recorded as passed.
 
 ---
 
@@ -1859,8 +2224,21 @@ The prompt is one-shot (gated on the root folder not existing). If it was declin
 `createAdvancedFolders()` is exported and can be called from the console.
 
 **Carries into Phase 5:** `completed` also left the flags — quest status is now `system.status`
-(`"0"` open / `"1"` complete / `"2"` failed). Check `update-quest-journal` against that before
-porting `replaceContent`.
+(`-1` Undiscovered / `0` In Progress / `1` Completed / `2` Failed). Check `update-quest-journal`
+against that before porting `replaceContent`.
+
+> **⚠️ Correction, 2026-08-15.** This line previously wrote those values as the **strings**
+> `"0"` / `"1"` / `"2"`. `status` is a **`NumberField`** — verified in the installed
+> `scripts/journal/JournalPageQuest.js`, and the shipped `quest.json` fixture stores `"status": 0`
+> unquoted. The `QUEST_STATUS` choices map only _looks_ string-keyed because every JS object key
+> is a string. Writing `"1"` where a number is expected is precisely the class of silent-success
+> failure this phase exists to avoid.
+>
+> Same read also confirms the field types 7b would write: `questGiver`, `location`, `difficulty`
+> and `deadline` are plain `StringField`s and `status` a `NumberField`, while **only**
+> `objectiveState` / `objectiveSecrets` are `ObjectField`s. So 7b's typed writes involve **no
+> derived keys at all** — it is the _easier_ half of the Simple Quest work, not the harder one,
+> and it is the natural place to prove the read-modify-write pattern before 7a bets on it.
 
 ---
 
