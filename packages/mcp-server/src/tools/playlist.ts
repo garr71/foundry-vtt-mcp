@@ -21,7 +21,10 @@ export class PlaylistTools {
       {
         name: 'list-playlists',
         description:
-          'List all Foundry VTT playlists with their current playback state, mode, and sounds. Use this to see what music/ambience is available before playing.',
+          'List all Foundry VTT playlists with their current playback state, mode, and sounds. Use this to see what music/ambience is available before playing. ' +
+          'Each sound reports volume on both scales: "volume" is Foundry\'s internal 0.0–1.0 value, which is what play-playlist accepts back, ' +
+          'and "volumePercent" is what the Foundry sidebar displays for that track. They differ — internal 0.5 shows as 63% — so quote volumePercent ' +
+          'when describing what the GM sees, and pass volume when setting it.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -159,7 +162,13 @@ export class PlaylistTools {
         sounds: pl.sounds.map((s: any) => ({
           name: s.name,
           playing: s.playing,
-          volume: Math.round(s.volume * 100) + '%',
+          // Two scales, each named. `volume` is Foundry's internal 0-1 value and is what
+          // play-playlist accepts back; `volumePercent` is what Foundry's own sidebar shows
+          // for it, which is the slider position, not the raw value (internal 0.5 → "63%").
+          // The old `Math.round(s.volume * 100) + '%'` reported the raw value wearing a
+          // percent sign, so it disagreed with the UI and could not be fed back as a volume.
+          volume: s.volume,
+          volumePercent: typeof s.volumePercent === 'number' ? `${s.volumePercent}%` : null,
           repeat: s.repeat,
         })),
       })),

@@ -10212,14 +10212,25 @@ export class FoundryDataAccess {
     this.validateFoundryState();
 
     const playlists = (game.playlists?.contents || []).map((pl: any) => {
-      const sounds = (pl.sounds?.contents || []).map((s: any) => ({
-        id: s.id,
-        name: s.name,
-        playing: s.playing ?? false,
-        volume: s.volume ?? 0.5,
-        repeat: s.repeat ?? false,
-        path: s.path ?? null,
-      }));
+      const sounds = (pl.sounds?.contents || []).map((s: any) => {
+        // Foundry stores volume on an internal 0-1 scale, but its sidebar shows the *slider
+        // position* as the percentage — `volumeToPercentage(volumeToInput(v))`
+        // (playlist-directory.mjs L404/L414) — so an internal 0.5 displays as 63%. Report both,
+        // each named for its scale, rather than picking one and leaving the caller to guess
+        // which it is reading. `volume` is the value play-playlist accepts back.
+        // Note the old `?? 0.5` made an absent volume indistinguishable from a track really
+        // set to 0.5; a non-numeric volume now reads null.
+        const raw = typeof s.volume === 'number' ? s.volume : null;
+        return {
+          id: s.id,
+          name: s.name,
+          playing: s.playing ?? false,
+          volume: raw,
+          volumePercent: raw !== null ? this.volumeToUiPercent(raw) : null,
+          repeat: s.repeat ?? false,
+          path: s.path ?? null,
+        };
+      });
 
       return {
         id: pl.id,
@@ -10251,7 +10262,7 @@ export class FoundryDataAccess {
   }): Promise<any> {
     this.validateFoundryState();
 
-    const pl = this.findPlaylist(options.playlist);
+    const { playlist: pl, ambiguousWith } = this.findPlaylist(options.playlist);
 
     // Apply playlist-level mode change if requested (persistent).
     // NOTE: Foundry has no SOUNDBOARD mode constant — "Soundboard Only" in the UI is
@@ -10269,15 +10280,22 @@ export class FoundryDataAccess {
 
     if (options.sound) {
       const query = options.sound.toLowerCase();
-      const sound = (pl.sounds?.contents || []).find(
-        (s: any) =>
-          s.id === options.sound ||
-          (s.name ?? '').toLowerCase() === query ||
-          (s.name ?? '').toLowerCase().includes(query)
-      );
+      const allSounds = (pl.sounds?.contents || []) as any[];
+
+      // Exact-first, same reasoning as findPlaylist: the old OR-ed predicate let collection
+      // order pick the winner, so a track named "Horn" lost to "Horn Call (distant)".
+      const exactSound =
+        allSounds.find((s: any) => s.id === options.sound) ??
+        allSounds.find((s: any) => (s.name ?? '').toLowerCase() === query);
+      const partialSounds = exactSound
+        ? []
+        : allSounds.filter((s: any) => (s.name ?? '').toLowerCase().includes(query));
+      const sound = exactSound ?? partialSounds[0];
       if (!sound) {
         throw new Error(`Sound "${options.sound}" not found in playlist "${pl.name}".`);
       }
+      const soundAmbiguousWith =
+        partialSounds.length > 1 ? partialSounds.map((s: any) => s.name) : undefined;
 
       // Apply track-level changes if requested (persistent)
       const updates: Record<string, any> = {};
@@ -10296,6 +10314,10 @@ export class FoundryDataAccess {
         ...(options.mode !== undefined ? { mode: options.mode } : {}),
         ...(options.loop !== undefined ? { loop: options.loop } : {}),
         ...(options.volume !== undefined ? { volume: options.volume } : {}),
+        // Name the other candidates when a substring matched several, so "it played the wrong
+        // track" is diagnosable from the response instead of invisible.
+        ...(ambiguousWith ? { ambiguousWith } : {}),
+        ...(soundAmbiguousWith ? { soundAmbiguousWith } : {}),
       };
     }
 
@@ -10313,6 +10335,7 @@ export class FoundryDataAccess {
       playlist: pl.name,
       mode: resolvedMode,
       ...(resolvedMode === 'soundboard' ? { playing: false } : {}),
+      ...(ambiguousWith ? { ambiguousWith } : {}),
     };
   }
 
@@ -10322,36 +10345,86 @@ export class FoundryDataAccess {
   async stopPlaylist(options: { playlist?: string }): Promise<any> {
     this.validateFoundryState();
 
+    // Counting playing sounds is what makes either branch falsifiable: the named path used to
+    // report `Stopped playlist "X"` whether or not anything was playing, so a no-op and a real
+    // stop produced the same success string. Count BEFORE stopping, obviously.
+    const countPlayingSounds = (pl: any): number =>
+      ((pl.sounds?.contents || []) as any[]).filter((s: any) => s.playing).length;
+
     if (!options.playlist) {
       // Stop everything
       const playing = (game.playlists?.contents || []).filter((pl: any) => pl.playing);
+      let soundsStopped = 0;
       for (const pl of playing) {
+        soundsStopped += countPlayingSounds(pl);
         await pl.stopAll();
       }
       return {
         success: true,
         message: `Stopped all playlists (${playing.length} were playing).`,
         stopped: playing.length,
+        stoppedSounds: soundsStopped,
       };
     }
 
-    const pl = this.findPlaylist(options.playlist);
+    const { playlist: pl, ambiguousWith } = this.findPlaylist(options.playlist);
+    const wasPlaying = pl.playing ?? false;
+    const soundsStopped = countPlayingSounds(pl);
     await pl.stopAll();
-    return { success: true, message: `Stopped playlist "${pl.name}".`, playlist: pl.name };
+    return {
+      success: true,
+      message: wasPlaying
+        ? `Stopped playlist "${pl.name}" (${soundsStopped} sound${soundsStopped === 1 ? '' : 's'} playing).`
+        : `Playlist "${pl.name}" was not playing; nothing to stop.`,
+      playlist: pl.name,
+      // `stopped` counts playlists in both branches, so the unit is the same either way.
+      stopped: wasPlaying ? 1 : 0,
+      stoppedSounds: soundsStopped,
+      ...(ambiguousWith ? { ambiguousWith } : {}),
+    };
   }
 
-  private findPlaylist(query: string): any {
+  /**
+   * Convert Foundry's internal 0-1 volume to the percentage its own UI displays.
+   *
+   * Delegates to `AudioHelper.volumeToInput` rather than reimplementing the 1.5 exponent, so the
+   * curve cannot drift out of sync with core. Returns null if the helper is unavailable — a
+   * guessed number here would be indistinguishable from a real reading.
+   */
+  private volumeToUiPercent(volume: number): number | null {
+    const helper = (globalThis as any).foundry?.audio?.AudioHelper;
+    if (typeof helper?.volumeToInput !== 'function') return null;
+    return Math.round(helper.volumeToInput(volume) * 100);
+  }
+
+  /**
+   * Resolve a playlist by id, exact name, then substring.
+   *
+   * Exact matches are resolved in their own pass first. The previous single-predicate `find()`
+   * OR-ed all three clauses together, so the first element matching *any* of them won and
+   * collection order decided the result: a playlist named "Combat" lost to "Combat Ambience"
+   * purely for sorting earlier. `sendChatMessage` already split its passes this way.
+   *
+   * An ambiguous substring still resolves (to preserve the working behaviour) but reports the
+   * other candidates, because `ErrorHandler.handleToolError` erases thrown messages — a
+   * diagnostic worth having has to be *returned*, not thrown.
+   */
+  private findPlaylist(query: string): { playlist: any; ambiguousWith?: string[] } {
     const lower = query.toLowerCase();
-    const pl = (game.playlists?.contents || []).find(
-      (p: any) =>
-        p.id === query ||
-        (p.name ?? '').toLowerCase() === lower ||
-        (p.name ?? '').toLowerCase().includes(lower)
-    );
-    if (!pl) {
+    const playlists = (game.playlists?.contents || []) as any[];
+
+    const exact =
+      playlists.find((p: any) => p.id === query) ??
+      playlists.find((p: any) => (p.name ?? '').toLowerCase() === lower);
+    if (exact) return { playlist: exact };
+
+    const partial = playlists.filter((p: any) => (p.name ?? '').toLowerCase().includes(lower));
+    if (partial.length === 0) {
       throw new Error(`Playlist "${query}" not found.`);
     }
-    return pl;
+    return partial.length > 1
+      ? { playlist: partial[0], ambiguousWith: partial.map((p: any) => p.name) }
+      : { playlist: partial[0] };
   }
 
   /**
