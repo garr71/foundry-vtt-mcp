@@ -6100,8 +6100,18 @@ export class FoundryDataAccess {
         // Get the character for speaker info
         const character = characterId ? game.actors?.get(characterId) : null;
 
-        // Use the modern Foundry v13 approach with roll.toMessage()
-        const rollMode = isPublic ? 'publicroll' : 'whisper';
+        // v14: `Roll#toMessage`'s `rollMode` option is deprecated in favour of `messageMode`
+        // (removed in v16). More urgently, **'whisper' was never a valid rollMode at all** —
+        // `Roll._mapLegacyRollMode` maps only roll/publicroll/gmroll/blindroll/selfroll and
+        // passes anything else through untouched, so 'whisper' reached
+        // `ChatMessage#applyMode`, where `CONFIG.ChatMessage.modes['whisper']` is undefined and
+        // reading `.handler` off it threw. Valid modes are public / gm / blind / self / ic.
+        //
+        // 'gm' rather than 'blind': applyMode only substitutes the all-GMs list when
+        // `whisper` is EMPTY, and we always populate whisperTargets below, so our explicit
+        // recipients survive and `blind` stays false. 'blind' would hide the result from the
+        // roller, which is not what a private roll means here.
+        const messageMode = isPublic ? 'public' : 'gm';
         const whisperTargets: string[] = [];
 
         if (!isPublic) {
@@ -6126,10 +6136,13 @@ export class FoundryDataAccess {
           ...(whisperTargets.length > 0 ? { whisper: whisperTargets } : {}),
         };
 
-        // Use roll.toMessage() with proper rollMode
-        await roll.toMessage(messageData, {
+        // Cast: the bundled Foundry type declarations still describe the pre-v14 signature and
+        // only know `rollMode`, so `messageMode` does not typecheck against them. The runtime
+        // signature is `toMessage(messageData, {messageMode, rollMode, create})` — verified in
+        // the installed `client/dice/roll.mjs` L926, which is the authority here, not the types.
+        await (roll as any).toMessage(messageData, {
           create: true,
-          rollMode,
+          messageMode,
         });
 
         // Update the ChatMessage to reflect rolled state
