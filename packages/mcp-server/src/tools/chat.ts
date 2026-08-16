@@ -23,7 +23,11 @@ export class ChatTools {
         description:
           'Read recent Foundry VTT chat messages, including roll results, player actions, and GM narration. ' +
           'Use this to check the outcome of rolls without needing them relayed verbally. ' +
-          'Set rollsOnly=true to filter to dice roll results only.',
+          'Set rollsOnly=true to filter to dice roll results only. ' +
+          'Each message reports "author" (the user who sent it) and "speaker" (the actor or alias it was spoken as) ' +
+          'independently, and either may be null: a null speaker means the message was posted with no actor attached ' +
+          '(plain user chat or narration), NOT that the author spoke it. Do not infer one from the other. ' +
+          'An "unresolvedActorId" field means the message references an actor that no longer exists in this world.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -82,12 +86,22 @@ export class ChatTools {
     }
 
     const formatted = messages.map((msg: any) => {
+      // `author` (the User who sent it) and `speaker` (the actor/alias it was spoken as) are
+      // reported independently and may each be null. The old `?? msg.author` fallback made a
+      // message with NO speaker indistinguishable from one spoken by its own author — which is
+      // exactly the distinction a GM reading back the log needs, and it defeated the Phase 2
+      // gate fixture. Let the caller see the absence.
       const base: any = {
         id: msg.id,
         time: msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : null,
-        author: msg.author,
-        speaker: msg.speaker?.alias ?? msg.speaker?.actor ?? msg.author,
+        author: msg.author ?? null,
+        speaker: msg.speaker?.alias ?? msg.speaker?.actor ?? null,
       };
+
+      // Surface a speaker whose actor id no longer resolves, rather than dropping the trace.
+      if (msg.speaker?.unresolvedActorId) {
+        base.unresolvedActorId = msg.speaker.unresolvedActorId;
+      }
 
       if (msg.flavor) {
         base.flavor = msg.flavor;

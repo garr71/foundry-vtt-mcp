@@ -10416,6 +10416,21 @@ export class FoundryDataAccess {
 
         const speaker = msg.speaker ?? {};
 
+        // Resolve the speaker's actor id to a name. A present-but-unresolvable id (deleted
+        // actor, or a message imported from another world) must yield null: the previous
+        // `?? speaker.alias` made a lookup that MISSED read exactly like one that succeeded.
+        const speakerActorId: string | null = speaker.actor ?? null;
+        const speakerActorName: string | null = speakerActorId
+          ? ((game.actors?.get(speakerActorId) as any)?.name ?? null)
+          : null;
+
+        // `alias` is a StringField with `blank: true`, so a message created with no speaker
+        // stores "" rather than null — `?? null` would let the empty string through and print
+        // as a blank speaker instead of a visible absence. Normalise blank to null.
+        const rawAlias: unknown = speaker.alias;
+        const speakerAlias: string | null =
+          typeof rawAlias === 'string' && rawAlias.trim() !== '' ? rawAlias.trim() : null;
+
         return {
           id: msg.id,
           timestamp: msg.timestamp,
@@ -10423,13 +10438,16 @@ export class FoundryDataAccess {
           style: msg.style ?? 0,
           // v14: ChatMessage#author is a resolved User document. `msg.user`/`msg.userId`
           // were removed with no shim, so the old lookup silently yielded the speaker alias.
-          author: msg.author?.name ?? speaker.alias ?? 'Unknown',
+          // Report null when the User cannot be resolved rather than substituting the speaker
+          // alias — collapsing author into speaker is what defeated the Phase 2 gate fixture.
+          author: msg.author?.name ?? null,
           speaker: {
-            alias: speaker.alias ?? null,
-            actor: speaker.actor
-              ? ((game.actors?.get(speaker.actor) as any)?.name ?? speaker.alias)
-              : null,
+            alias: speakerAlias,
+            actor: speakerActorName,
             token: speaker.token ?? null,
+            // Present only when an actor id was recorded but no longer resolves, so a failed
+            // lookup is visible instead of wearing the alias as a disguise.
+            ...(speakerActorId && !speakerActorName ? { unresolvedActorId: speakerActorId } : {}),
           },
           flavor: msg.flavor ? msg.flavor.replace(/<[^>]*>/g, '').trim() : null,
           content: cleanContent,
