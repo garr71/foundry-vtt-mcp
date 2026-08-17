@@ -2466,15 +2466,146 @@ name, before trusting a result.
 - "The symbol still exists" is not "the behaviour still exists". Read the call site.
 - Confirm a module is installed before scheduling work against it. SQ **is** installed at 5.1.4.
 
-#### 7b — Simple Quest, deferred surface
+#### 7b — Timeline & enrichers 🕰️ ⬜ **designed 2026-08-17, not started**
 
-Deliberately out of 7a scope, in rough order of likely value:
+> **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
+> surface listed further down: **`event`/`era` timeline** (the campaign involves history and dated
+> events) and **custom enrichers**. `@time` is sequenced **last** at Franklin's direction — Simple
+> Timekeeping is not installed and he wants to evaluate it first, and per the standing rule a module
+> that is not installed cannot be gated.
+>
+> Read from the installed 5.1.4 source on 2026-08-17: `JournalPageEvent.js`, `JournalPageEra.js`,
+> `classes/Timeline.js`, `classes/TimelineJournalConfig.js`, `scripts/enrichers.js`.
 
-- **`event` / `era`** — the timeline. Small schemas (`year`, `duration`, `icon`, `banner`, `offset`,
-  `flipped` / `eraStart`, `eraEnd`, `color`). Genuinely useful for Franklin's "history and timeline
-  prep" case, and cheap once 7a's generic tools exist. Most likely to be pulled forward.
-- **`achievement`** — needs `awardedTo`, a `SetField` of user IDs. Party-facing and low risk, but
-  no live-session pressure.
+##### ⚠️ The headline finding: an event outside every era is silently dropped
+
+`Timeline.js` L117-118:
+
+```js
+const era = eras.find((e) => year >= e.system.eraStart && year < e.system.eraEnd);
+if (!era) continue;                                    // no era → the event never renders
+```
+
+An event whose `year` falls in no era **does not appear on the timeline at all**. The page exists,
+every field reads back correctly, and nothing anywhere says it is invisible. That is the house
+failure mode again — this time in the module, which means our tools have to be the thing that
+notices.
+
+Two details sharpen it:
+
+- **`eraEnd` is exclusive** (`year < eraEnd`). An event dated exactly on an era's end year belongs
+  to no era unless the next era starts on that number. Off-by-one here costs a vanished event.
+- **A null `eraEnd` displays but does not match.** Rendering falls back to
+  `eraEnd || nextEra?.eraStart` (L84), while event matching uses the raw `e.system.eraEnd` (L117).
+  So an era missing its end renders fine and quietly swallows nothing — every event that should sit
+  in it disappears instead.
+
+##### What the timeline actually is
+
+| Fact                                                                           | Evidence                                                                                                                                                   |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A timeline is **one journal**; its `event` and `era` pages are its content     | `new Timeline(container, journal, page)`                                                                                                                   |
+| Axis config lives in **journal flags**, not page `system`                      | `TimelineJournalConfig` L38-43, L79                                                                                                                        |
+| Flag keys                                                                      | `timeScale` (10), `dynamicTimeScale` (false), `negativeAbb` ("BC"), `positiveAbb` ("AC"), `showMinus` (false), `content` ("always"/"toggleOff"/"toggleOn") |
+| Eras are laid out **contiguously**, stacked in `eraStart` order                | L87-89: each era's start pixel is the previous era's end                                                                                                   |
+| So **numeric gaps between eras are not drawn as gaps**                         | geometry is a sequence of blocks, not a true axis                                                                                                          |
+| `dynamicTimeScale` sizes an era by **event count**, not by its length in years | L70-74                                                                                                                                                     |
+| Events alternate **left/right by index**, not by any field                     | L149-153 — side is not controllable                                                                                                                        |
+| Both eras and events are **permission-filtered** (OBSERVER)                    | L61, L63 — so 7a.5's visibility tooling already applies                                                                                                    |
+| `year`, `eraStart`, `eraEnd` are `required: true` integers                     | the two page classes                                                                                                                                       |
+
+##### ⚠️ A counter inside an event body resolves against the **era**, not the event
+
+`Timeline.js` L130 enriches an event's content with `relativeTo: era` — the containing era, not the
+event page. `@COUNT` and `@REPUTATION` read and write `content.relativeTo`'s flags
+(`enrichers.js` L127-128, L158-159), so **a counter written into an event body stores its value on
+the era page**, and every event in that era shares it. Almost certainly an SQ bug; either way it
+constrains where counters can be placed. Verify before building the counter tool.
+
+##### What already works, so the phase is smaller than it looks
+
+`create-simple-quest-page` and `update-simple-quest-page` are **generic over page type** and validate
+against the live schema, so `simple-quest.event` and `simple-quest.era` pages should already be
+creatable and editable today, `awardedTo` and all. **Cycle 1 verifies that rather than assuming it.**
+Likewise, every enricher is plain text in `text.content`, so **emitting** `@QUEST` / `@LORE` / `@MAP`
+/ `@TTM` / `@COUNT` / `@REPUTATION` needs no new tool at all.
+
+What is genuinely missing is narrower: **flags cannot be written** (timeline config and counter state
+both live in flags), **nothing detects the orphaned-event trap**, and **nothing can read the timeline
+as rendered**.
+
+##### Cycles
+
+**7b.0 — Flags foundation (no new tools).** A write path for `flags['simple-quest']` on both
+JournalEntry and JournalEntryPage. Namespace-scoped: refuse any flag scope other than
+`simple-quest`, so this never becomes a general-purpose flag poker. Flags are schema-less, so 0b's
+live-schema validation has no equivalent — instead each _caller_ declares its own allowed key set,
+and the writer refuses anything outside it. Counter ids are arbitrary by design and are the
+exception, scoped to the `counters` object.
+
+**7b.1 — `get-timeline`.** Read a timeline journal exactly as `Timeline._prepareContext` does: eras
+sorted by `eraStart`, events sorted by `year`, each event resolved to its containing era — and
+**`orphanedEvents` listed explicitly**, with the reason (no era covers the year / era has a null
+`eraEnd` / year equals an exclusive `eraEnd`). Read-only, and it is the tool that makes the headline
+trap visible. Also returns the journal's axis flags and each page's `uuid`, which is what
+cross-link emission needs.
+
+**7b.2 — Containment guard on create/update.** When an `event` is written, report whether it lands
+in an era. **Warn, do not refuse:** writing events before their eras exist is a legitimate prep
+order, so a refusal would fight the workflow. But the response must say so plainly, and
+`get-timeline` must list it. Same for an `era` written with a null `eraEnd`.
+
+**7b.3 — `set-timeline-config`.** The six journal flags. Numbers validated (`timeScale > 0`),
+`content` constrained to its three choices.
+
+**7b.4 — `set-quest-counter`.** `@COUNT` / `@REPUTATION` state in page flags
+`['simple-quest'].counters[id]`. Blocked on resolving the `relativeTo: era` question above — if
+counters in event bodies really do write to the era, the tool must target the page the enricher
+resolves against, not the page the text lives on, and say which.
+
+**7b.5 — `@time`, LAST.** Requires **Simple Timekeeping & Calendar**, not installed.
+⛔ **Do not start** until it is installed and its source has been read. Emitting `@time` without it
+renders the literal text "Simple Timekeeping & Calendar Not Installed" into the page — not a broken
+link, a visible embarrassment — so until then the tools should treat `@time` as forbidden output.
+
+**Tool count: 56 → 59** (`get-timeline`, `set-timeline-config`, `set-quest-counter`).
+
+##### Gate design
+
+| Cycle | Check that can actually fail                                                                                                                                                                                                                                         |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | Create an event dated **outside** every era and assert `get-timeline` lists it under `orphanedEvents` — then confirm in the Simple Quest timeline that it genuinely does not render. The page reading back correctly is exactly what makes this invisible otherwise. |
+| 1     | **Boundary:** an event dated exactly on an era's `eraEnd` must be reported orphaned (exclusive bound), while one dated on `eraStart` must not. A fixture where both eras are adjacent distinguishes the off-by-one; one with a gap does not.                         |
+| 1     | Assert `get-timeline`'s era order and event-to-era mapping match what the module renders, not what the numbers suggest — eras stack contiguously, so a gap in years is not a gap on screen.                                                                          |
+| 2     | Create an event with no eras present at all: must succeed **and** warn. A refusal here fails the workflow, so the check is that it wrote and reported, not that it blocked.                                                                                          |
+| 3     | **Call with no arguments** and assert the flags are unchanged rather than reset to defaults — a config writer that helpfully fills in `timeScale: 10` would silently retune an existing timeline.                                                                    |
+| 3     | Away-and-back on `timeScale`, and confirm in the UI that the axis actually rescales. Reading the flag back proves storage, not effect.                                                                                                                               |
+| 4     | Write a counter, then read it back **through the rendered page**, not just the flag — and settle whether an event-body counter lands on the event or its era. If it lands on the era, that is the finding, not a bug in our tool.                                    |
+| 4     | Two counters with different ids on one page must not disturb each other (flags are an object; the merge trap from 7a.5 applies).                                                                                                                                     |
+
+##### Traps carried in
+
+- **Foundry merges object writes.** Removing a key from a flags object does nothing; `setFlag` with
+  an object merges. Deleting a counter needs the `-=` unset form. This is the 7a.5 false-success
+  defect, and flags are the same shape.
+- **Read the field back after writing** and refuse to claim success if it did not take.
+- Adding a field to a reader is not done until every **passthrough that whitelists fields** is
+  updated (0d).
+- For any check whose evidence is transient or on screen, the harness **stops and waits**; it does
+  not sleep (7a.4).
+- Confirm a module is installed before scheduling work against it (7c). `@time` is why this phase
+  ends where it does.
+
+#### 7b-deferred — the rest of the Simple Quest surface
+
+Still out of scope after the tranche above. `achievement` needs **no new work** — `awardedTo` is a
+`SetField` and the generic create/update tools already handle those (proven in 7a.3).
+
+- ~~**`event` / `era`** — the timeline.~~ **Pulled forward into 7b above, 2026-08-17.**
+- ~~**Custom enrichers as first-class output**~~ — **also 7b above.** Emission needs no tool;
+  only counter state does.
+- ~~**`achievement`**~~ — **needs no work.** `awardedTo` is a `SetField`, and the generic
+  create/update tools handle those already (proven in 7a.3).
 - **`map`** — waypoints, fog-of-war and pins live in `classes/MapImage.js` (73 KB) and page flags,
   not in the data model. Not a schema write.
 - **`investigation`** — `JournalPageInvestigation.js` is 84 KB of mind-map. Its own project.
