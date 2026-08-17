@@ -2667,17 +2667,33 @@ description can carry**, and they are the whole reason this deliverable exists:
    them, so an assistant will never write `@QUEST[uuid]{Label}` because nothing tells it the syntax is
    available. Same for `@time` being **forbidden output** while Simple Timekeeping is uninstalled.
 
-##### Structure: two parts, kept structurally separate
+##### Delivery: one file, pointed at — not copied
 
-- **Part A — paste-ready assistant instructions.** Short and self-contained (~15-25 lines), written to
-  be dropped into the GM AI's project instructions verbatim. Covers only the three gaps above. This is
-  the part that has to be short, because it is loaded every session.
-- **Part B — human reference for Franklin.** The tool inventory, the lifecycle table, the traps, and
-  the "why" behind the defaults. Length is free here; nothing loads it into a context window.
+**Franklin's correction, 2026-08-17.** An earlier draft of this section proposed a short "paste-ready"
+block to drop into the GM AI's project instructions. **That was wrong** — it reintroduces the second
+copy this deliverable exists to avoid. His mechanism instead:
 
-⚠️ **An `.md` file in the vault is not read by the GM AI.** Part A only takes effect once it is pasted
-into (or referenced by) the assistant's project instructions. Worth stating in the document itself, so
-future-Franklin does not assume writing it was sufficient.
+- **Tell the assistant the file exists, where it is, and what it is for**, and let it read on demand.
+  Exactly the pattern this repo already uses: `CLAUDE.md` points at this plan and says read it before
+  touching a shared file.
+- **Or a Simple Quest skill** that _mandates_ the read before doing Simple Quest work — stronger than
+  an instruction, because it is enforced rather than hoped for, and it loads only when the work is
+  actually happening.
+
+Two consequences for how the document gets written:
+
+1. **Length is much freer.** Nothing is paying for it every session, so it does not have to be
+   compressed to twenty lines. Write it to be _complete_, not short.
+2. **No Part A / Part B split is required.** Organise it for a reader skimming to the answer — the
+   lifecycle up front, the traps near the tools they apply to. One document, one audience posture:
+   "someone about to do Simple Quest work", human or assistant.
+
+⚠️ **Open dependency, resolve before writing:** whichever assistant acts as the GM needs **filesystem
+read access to the vault path**. Claude Code reads `CLAUDE.md` and supports skills natively. Claude
+Desktop does neither, and cannot read a vault file at all unless a filesystem MCP server is connected
+alongside the Foundry one. **Confirm which environment the GM AI runs in before choosing the pointer
+mechanism** — if it is Desktop with only the Foundry MCP server, a pointer cannot be followed and the
+content has to reach it another way.
 
 ##### What the document must NOT do
 
