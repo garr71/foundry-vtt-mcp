@@ -1677,43 +1677,282 @@ violate strategy decision 4 while looking like compliance.
 > 7d ordering, by live-session value against risk: `get-token-distances` → `read-chat` speaker →
 > playlists → `show-journal-to-players` → `rollMode` → pf2e adapter. One deploy cycle each.
 
-#### 7a — Simple Quest, rebuilt against 5.1.4
+#### 7a — Simple Quest integration ⬜ **designed 2026-08-16, not started**
 
-- [ ] `set-quest-checklist-item` — new key derivation + `system.objectiveState` storage
-- [ ] `set-quest-visibility` — collapse to a single Foundry-ownership path
-- [ ] `update-quest-journal replaceContent` — replace Phase 5's refusal guard with real key
-      remapping, so content can be rewritten without orphaning objective state
-- [ ] **Decide the scope boundary first: modify-only, or create too?** MCP cannot currently produce
-      a `simple-quest.quest` page at all (see the constraint recorded in Phase 5), so quest
-      _creation_ is a separate and much larger job than quest _modification_. Settle this before
-      writing anything, not halfway through.
-- [ ] **A reader that can see `simple-quest.*` pages.** `getJournalPageContent` returns `page.src`
-      for non-text types, so every SQ page currently reads as `""`. This blocks append, blocks any
-      read-modify-write, and made two Phase 5 gate checks unverifiable. Likely the first thing 7a
-      needs, before any of the tools above.
-- [ ] **Re-verify every claim against the installed module before writing.** Three for three have
-      been wrong so far, and Phase 5's gate made it four (append to an SQ page was documented here
-      as legal; it has never worked).
+> **Design session, 2026-08-16 (Franklin + Claude).** This section **supersedes** the 7a and 7b
+> checklists that stood here before it, and discharges the 2026-08-15 scope decision above ("Simple
+> Quest is deferred until it gets its own analysis and plan"). The old 7a listed
+> `set-quest-checklist-item` / `set-quest-visibility` as tools to rebuild; that framing came from
+> the 3.0.20 tool names and is not the shape the work actually has. The old 7b logged typed page
+> subtypes as an unclaimed opportunity; it is now the centre of the phase, not an addendum.
+>
+> Everything below was read from the installed 5.1.4 source on 2026-08-16, plus core v14 for the
+> two claims that depend on it. Citations are to files on disk.
 
-Full analysis in "Simple Quest 3.0.20 → 5.1.4" below.
+**What this is for.** Franklin's framing: premium pf2e modules ship their own adorned Foundry
+journals carrying the adventure's prose and logic, written for the GM. Simple Quest is **not** a
+replacement for those. It is the **living campaign layer** — what actually happened at the table,
+plus light prep on places, factions and timeline — which the MCP assistant fills in during and
+after play. The assistant reads the module's journals for source material and **composes new SQ
+pages from them**.
 
-#### 7b — Capability the 5.x rewrite opened up
+**🔒 Scope boundary (Franklin, 2026-08-16): never write into module journals.** Read and recompose
+only. No `ForcedReplacement`, no `page.update({type: ...})` promotion of a stock page, no content
+edits. Module journals frequently carry embedded macro triggers (scene switches and the like) and
+mutating a page's type or content can break that logic. Promotion is technically trivial (SQ's own
+`migrateQuestJournal` does exactly it) and is **declined on purpose**, not for lack of a mechanism.
 
-SQ 5.x turned prose-with-checkboxes into **twelve schema-backed page subtypes** (quest, lore, map,
-character, creature, faction, location, achievement, era, event, investigation). Quest pages carry
-typed fields:
+##### What the investigation established
+
+The single most consequential finding, because it invalidates how this document has framed the
+blocker since Phase 5:
+
+> **⚠️ Correction, 2026-08-16. SQ pages are not unreadable — we never look at the field they use.**
+> The page body of every `simple-quest.*` type is the **core Foundry `page.text.content`**, format
+>
+> 1. `templates/journal-page-sheets/quest-view.hbs` L9 renders `{{{text.enriched}}}`, and the
+>    shipped `assets/example-journals/quest.json` L40-42 stores the entire "Welcome to Simple Quest"
+>    prose there. `system.*` carries only the structured extras.
+>
+> Previous revisions said the reader "returns `page.src` for non-text page types, so every
+> `simple-quest.*` page reads as `""`", and scoped that as a blocker gating all of 7a. The **cause**
+> is right (`data-access.ts` L4201 branches on `page.type === 'text'`). The **conclusion** was
+> wrong. The content is present and has always been present; the reader steps past it. This is a
+> one-line branch fix, not a rebuild, and it unblocks the phase rather than gating it.
+>
+> Fifth instance of the recurring failure mode, and the first where it bit the _plan_ rather than
+> the code: a silent default (`: page.src`) standing in for a lookup that was never attempted.
+
+| Fact                                                                          | Evidence                                                                                                                                                                                                                                                 |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **11** page subtypes, not twelve                                              | `module.json` `documentTypes.JournalEntryPage` — quest, lore, character, creature, faction, location, event, era, achievement, map, investigation                                                                                                        |
+| Page body is core `text.content`                                              | `quest-view.hbs` L9; `quest.json` L40-42                                                                                                                                                                                                                 |
+| `system` is composed from **8 reusable block classes**                        | `scripts/handlebars/*.js`, each a `static getSchema(label, key)`                                                                                                                                                                                         |
+| Block field keys are mechanical: `<blockName><index?>`                        | `html`, `html0`…; `iconList0`…; `stats0`…; `table0`…; `colorTags0`…; `colorHtml0`…; `resources`; `mainTag`                                                                                                                                               |
+| `module.json` `htmlFields` is **stale**                                       | It advertises `description.content` / `objectives.content`; **neither field exists** in the 5.1.4 schema. Do not build against it.                                                                                                                       |
+| SQ ships a **live schema exporter**                                           | `scripts/journal/JournalPageSchemaExporter.js` — `exportAllSchemas()` walks `CONFIG.JournalEntryPage.dataModels` and serialises every field                                                                                                              |
+| Page templates are **static HTML appended to `text.content`**                 | `scripts/journalTemplates.js` L19-46: `fetch(t)` → `textContent + "\n" + template` → `page.update({'text.content': …})`. Twelve files in `templates/JournalTemplates/`. The literal `https://source.unsplash.com/random` is the file-picker placeholder. |
+| SQ registers **custom enrichers** usable in `text.content`                    | `scripts/enrichers.js`: `@QUEST[uuid]{…}`, `@LORE[…]`, `@MAP[…]`, `@TTM[src]{title\|caption}`, `@COUNT[id]{max}`, `@REPUTATION[id,color,icon]{min,max}`, `@time[…]`                                                                                      |
+| Page image is plain data                                                      | `system.src` (`FilePathField`, IMAGE) + `system.aspectRatio` + `system.imageFilter`; `quest-view.hbs` L13-15                                                                                                                                             |
+| List items carry `hidden`, and a block vanishes when **all** items are hidden | e.g. `IconListBlock.js` L53-54, L78                                                                                                                                                                                                                      |
+| `system.tags` and `achievement.awardedTo` are **`SetField`s**                 | Fifth instance of the `Set`-serialises-to-`{}` trap (Phase 4, Phase 5). Needs `Array.from()` module-side.                                                                                                                                                |
+
+Two findings that change tool behaviour, both verified against **core v14**, not inferred:
+
+> **⚠️ `show-journal-to-players` grants no permission.** It calls `Journal.show(doc, {force:true})`,
+> and core is explicit (`client/documents/collections/journal.mjs` L56-69): the call emits a
+> `showEntry` socket that force-renders the document on player clients **regardless of normal
+> permission**. Close the window and it is gone; nothing in the player's sidebar changed.
+>
+> This is a live trap for the workflow below. Mid-session "give the party the quest" plausibly
+> reaches for this tool, and it will look like it worked. **7a must tighten that tool's description
+> to say it is a temporary spotlight that grants no access.**
+
+> **⚠️ Objective secrets are a display convention, not a security boundary.** Core defines
+> `.hidden { display: none !important; }` (`public/css/foundry2.css` L5697), and SQ hides a secret
+> objective by adding that class (`JournalPageHelpers.js` L417-420). The player's browser has
+> already received the **full** `text.content`, secrets included; devtools shows the lot.
+>
+> Consequence for prep: genuinely spoiler-sensitive material must ride on **page ownership** (the
+> document never reaches the client), not on `objectiveSecrets` or block `hidden`.
+
+##### The three visibility axes (they are independent)
+
+| Axis            | Field                                               | Controls                                             | Does **not** control            |
+| --------------- | --------------------------------------------------- | ---------------------------------------------------- | ------------------------------- |
+| Page access     | `ownership`, on the **page and its parent journal** | Whether the page exists for the player at all        | anything inside the page        |
+| Quest state     | `system.status` (-1 / 0 / 1 / 2)                    | The status badge, and Quest Recap grouping           | **visibility of anything**      |
+| Content secrets | `system.objectiveSecrets`, block item `hidden`      | What is redacted inside a page they can already read | whether they can reach the page |
+
+`status: -1` ("Undiscovered") hides nothing. Its only readers are the sidebar's Quest Recap
+grouping (`JournalBrowser.js` L324, L398-401). This confirms the 2026-08-13 correction already
+recorded further down, from the opposite direction.
+
+> **⚠️ Two-level ownership gotcha.** A player needs OBSERVER on the **JournalEntry** to see it in
+> the sidebar at all. Page `ownership.default` is `-1` (inherit) by default, and the shipped example
+> has the journal itself at `0` (none). Granting only the page leaves the player seeing nothing,
+> while every write reports success and every read-back confirms the field. **Gate this from a real
+> player login, never by reading the fields back.**
+
+##### The lifecycle this has to support
+
+Franklin's prep-then-reveal pattern, which is what drives the tool split:
 
 ```
-status (-1 Undiscovered / 0 In Progress / 1 Completed / 2 Failed)
-questGiver · location · difficulty · deadline · reward
-observerObjectivePermission (default / allow / deny)
+prep         create-simple-quest-page   page hidden · status -1 · objectives written but secret
+                                        · pre-populated list items hidden
+party takes  set-journal-visibility     page → observer (both levels); reveal chosen objectives
+             set-quest-progress         status → 0 (In Progress)
+             show-journal-to-players    optional, transient spotlight
+mid-play     set-journal-visibility     reveal further objectives / NPC facts as earned
+             set-quest-progress         objective → checked (or failed)
+resolution   set-quest-progress         status → 1 or 2
 ```
 
-Objectives gained three states (unchecked / checked / **failed**), per-objective secrets, nested
-parent-child auto-checking, and player-toggleable objectives over a socket.
+Two calls at hand-off rather than one compound call, deliberately: "the party can see this" and
+"the quest is now in progress" fail differently, and a single call hides which half did not land.
 
-Typed fields are a far better fit for an MCP assistant than string-munging prose — "mark the quest
-failed", "set the deadline" become typed writes. **Logged as opportunity, not commitment.**
+##### Tool granularity — decided 2026-08-16
+
+**Generic transport with live-schema validation**, not per-type tools. The numbers drove it: of the
+six priority types, only three have any type-specific scalar fields at all.
+
+| Type                              | Type-specific scalars beyond the shared blocks                                                                    |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `quest`                           | status, questGiver, location, difficulty, deadline, objectiveState, objectiveSecrets, observerObjectivePermission |
+| `location`                        | population, area, government, demonym, ruler, founded                                                             |
+| `faction`                         | leader, headquarters, memberCount, alignment, goals, rivals, allies                                               |
+| `character` · `creature` · `lore` | **none** — they differ only in which blocks they carry                                                            |
+
+Per-type tools would be six near-identical schemas, six deploy cycles before a single page could be
+written, and a permanently-resident tool-list cost (Lore alone carries three each of six block
+types). SQ is a protected module on theripper93's release cadence, and hand-mirrored Zod schemas
+rot silently; `exportAllSchemas()` cannot.
+
+> **The generic design is only acceptable with validation attached.** Foundry DataModels **silently
+> discard unknown keys** on `update()`. Submitting `system.description` (exactly what SQ's own stale
+> `module.json` advertises) returns a clean success with nothing written. That is the house failure
+> mode, sixth instance.
+>
+> **Every write tool must validate the submitted `system` object module-side against the live
+> `CONFIG.JournalEntryPage.dataModels[...]` schema and return the rejected keys alongside the valid
+> ones.** The error is the documentation: a wrong guess costs one round trip and teaches the correct
+> field names, instead of costing tokens in every session's tool list. Without this, build per-type
+> instead.
+
+**Split by gesture, not by data structure.** The two live-play tools divide the way Franklin's
+sentences divide, not the way the schema does:
+
+- `set-quest-progress` — "they finished the second objective", "the quest failed"
+- `set-journal-visibility` — "the party can see this now", "they learned the thing about the Hellknights"
+
+Those are two sentences and five field paths. The boundary follows the sentence.
+
+##### Cycles
+
+Priority page types, in order: **quest · lore · location · character · creature · faction**. Then
+`event` / `era` (timeline). `map`, `achievement` and `investigation` are deferred (see 7b).
+
+One tool per deploy cycle, per the standing cadence rule.
+
+**7a.0 — Foundation (three cycles, no new tools).** All three are generic defect fixes with value
+beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
+
+- [ ] **0a · Reader.** `getJournalPageContent` returns `text.content` when the page has one, keeps
+      `src` for genuinely src-backed types, and adds `system` to the payload. Also returns a parsed
+      **objective manifest** for `simple-quest.quest` — `{index, depth, text, key, state, secret}`
+      per `<li>`, document order. The manifest lives here, not in the reveal tool, because
+      `create-simple-quest-page` and `set-quest-progress` need the same parse.
+      **Module-side, necessarily:** key derivation needs `enrichHTML`, a DOM, and Foundry's
+      `String#slugify`, none of which exist server-side. It must run against the **enriched** DOM —
+      an `@QUEST[…]{Label}` inside an `<li>` changes `textContent` and therefore the slug.
+- [ ] **0b · Writer.** `createJournalEntry` / `updateJournalContent` accept `type` and `system`
+      instead of hardcoding `type: 'text'` (`data-access.ts` L4054, L4238). Unknown-key validation
+      lands here, so both write tools inherit it.
+- [ ] **0c · Search.** `handleSearchJournals` skips every non-text page
+      (`quest-creation.ts` L764: `if (page.type !== 'text') continue;`). Every SQ page we create
+      would be unsearchable. Fix the skip. Note in passing: it also does one WebSocket round trip
+      per page, which will be slow in a module world — **measure before optimising**, do not bundle
+      a rewrite into this cycle.
+
+**7a.1 — `get-simple-quest-context`.** Live schemas via SQ's own `exportAllSchemas({toFile:false})`,
+plus the folder/tab structure (root + the five `simpleQuestDir`-flagged folders + tab folders with
+their icons). Read-only, cheap, and makes the write tools self-describing.
+
+**7a.2 — `create-simple-quest-page`.** One page per call, deliberately: Franklin batches at the
+thinking/vault level, and one-at-a-time gives the assistant a chance to read back what it made and
+catch errors per page. Parameters: journal or folder target, `type`, `name`, `text`, `system`,
+optional `template` (by name, with real image paths substituted for the unsplash placeholder) and
+image.
+
+> **Defaults diverge from SQ's own, on purpose.** SQ's schema defaults `status` to `0` / In Progress
+> (`JournalPageQuest.js` L34-38). For prep that is wrong: a quest written three weeks early would
+> sit hidden but labelled "In Progress" and land in the wrong Quest Recap group the moment access
+> was granted. Our defaults: **`status: -1`, page ownership none, list items hidden, objectives
+> secret.** This must be stated in the tool description, because it contradicts the module.
+
+**7a.3 — `update-simple-quest-page`.** Partial merge into `system`. Never a wholesale replace, and
+that has to be **enforced**, not documented.
+
+**7a.4 — `set-quest-progress`.** Owns `system.status`, `system.objectiveState`, and appending new
+`<li>` objectives.
+
+> **Narrower guarantee than Phase 5's blanket refusal.** Appending an `<li>` is **safe**: every
+> existing `<li>` keeps its text and therefore its slug. Only **rewriting or reordering existing
+> objective text** orphans state. So Phase 5's `replaceContent` refusal can be narrowed rather than
+> replaced with full key remapping — the old 7a checklist over-scoped this.
+
+**7a.5 — `set-journal-visibility`.** Owns `ownership` (page **and** journal), `system.objectiveSecrets`,
+and `hidden` on block list items. Reveal selectors resolve against the manifest from 0a:
+`"all"` · ordinals `[1]` · keys `["question-the-harbourmaster"]`.
+
+> **⚠️ Secrets cascade visually through DOM nesting, but not in data.** A secret parent `<li>` hides
+> its whole subtree via `.hidden` regardless of the children's own flags. Revealing a nested
+> objective while its parent is still secret **changes the data and changes nothing on screen**.
+> The tool must **report** this, not auto-reveal ancestors — auto-revealing a parent to satisfy a
+> request about a child would spill sibling objectives that were meant to stay back, and that
+> failure is invisible until a player mentions it:
+>
+> ```
+> { revealed: [...], alreadyVisible: [...],
+>   hiddenByAncestor: [{ key: "search-the-docks", ancestor: "find-the-missing-courier" }] }
+> ```
+
+For list items, address by **name first, index second**, and return the resolved item. A name that
+matches nothing must fail loudly rather than falling back to index 0 — that is the exact failure
+shape this project has now shipped five times. `index: "all"` covers "hide the whole block", since
+list blocks have no block-level flag and disappear only when every item is hidden.
+
+**Tool count: 51 → 56.**
+
+##### Gate design
+
+Per the standing rule that a test which cannot fail is not a test. Each check below names the
+fixture and what distinguishes a pass from an accident.
+
+**Fixture:** SQ's own example quest journal, imported by answering **Yes** to "Create Extended
+Structure" (or `createAdvancedFolders()` from the console). Confirm fixture **identity**, not just
+name, before trusting a result.
+
+| Cycle | Check that can actually fail                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0a    | **The shipped `objectiveState` keys are the oracle.** `quest.json` stores **9** keys for the example page. Our parser must reproduce that set **exactly**. The long key `the-tabsthe-header-shows-all-the-folders-containe` is the discriminator: it proves `textContent` includes descendant text **and** that the slice-to-50 happens **before** slugify. A parser that emits `the-tabs` is wrong and this fixture says so. |
+| 0a    | Regression: a core `image` page must still return its `src`. The happy path does not test the branch it did not take.                                                                                                                                                                                                                                                                                                         |
+| 0b    | Create a `simple-quest.lore` page, read back `page.type`. Then submit `system.description` and assert it is **rejected by name** — proving validation ran, rather than the key being silently dropped as it is today. Also: omitting `type` must still yield `text`.                                                                                                                                                          |
+| 0c    | Search a string present **only** in an SQ page's `text.content` and in no `text` page. Before: 0 hits. After: 1 hit with the right `pageId`. If the string also occurs in a text page, the check proves nothing.                                                                                                                                                                                                              |
+| 1     | Assert the returned quest schema **contains** `questGiver`/`status`/`objectiveState` and **does not contain** `description`. The absence is the discriminating half: it proves we read the live DataModel and not the stale `module.json`.                                                                                                                                                                                    |
+| 2     | **Call with no `status` argument** and assert `-1`. Passing `-1` explicitly passes on SQ's default too, so it proves nothing.                                                                                                                                                                                                                                                                                                 |
+| 3     | **Away and back:** set `questGiver` to a new value, verify, set it back. Setting it to what it already holds is indistinguishable from the write being ignored. Separately, write `questGiver` **only** and assert `difficulty` is unchanged — that is the check that fails if the merge is really a replace. Read `system.tags` back and assert it is an array, not `{}`.                                                    |
+| 4     | Toggle an objective to checked, then failed, then back to unchecked, **watching the Simple Quest UI** rather than the tool response. Then append an objective and assert all 9 pre-existing keys survive in `objectiveState` **and still render checked**.                                                                                                                                                                    |
+| 5     | **Verify from a real player login**, not by reading fields back — the two-level ownership gotcha makes every field read pass while the player sees nothing. Then reveal a child whose parent is still secret and assert the response reports `hiddenByAncestor` **and** the player still cannot see it.                                                                                                                       |
+
+##### Traps carried into this phase
+
+- `ErrorHandler.handleToolError` erases the message of every error thrown inside a tool handler.
+  Any diagnostic worth writing must be **returned**, not thrown. Refusals and validation failures
+  are structured payloads (`{success:false, rejected:[…]}`), matching the `queries.ts` precedent.
+- A write to the wrong place still succeeds and returns OK. Verify in the SQ UI.
+- "The symbol still exists" is not "the behaviour still exists". Read the call site.
+- Confirm a module is installed before scheduling work against it. SQ **is** installed at 5.1.4.
+
+#### 7b — Simple Quest, deferred surface
+
+Deliberately out of 7a scope, in rough order of likely value:
+
+- **`event` / `era`** — the timeline. Small schemas (`year`, `duration`, `icon`, `banner`, `offset`,
+  `flipped` / `eraStart`, `eraEnd`, `color`). Genuinely useful for Franklin's "history and timeline
+  prep" case, and cheap once 7a's generic tools exist. Most likely to be pulled forward.
+- **`achievement`** — needs `awardedTo`, a `SetField` of user IDs. Party-facing and low risk, but
+  no live-session pressure.
+- **`map`** — waypoints, fog-of-war and pins live in `classes/MapImage.js` (73 KB) and page flags,
+  not in the data model. Not a schema write.
+- **`investigation`** — `JournalPageInvestigation.js` is 84 KB of mind-map. Its own project.
+- **Custom enrichers as first-class output** — `@QUEST`/`@LORE`/`@MAP` cross-links, `@COUNT` and
+  `@REPUTATION` counters (stored in `flags['simple-quest'].counters`). 7a can emit these as raw
+  text; a tool that manages counter state is separate. Note `@time[…]` requires **Simple
+  Timekeeping**, which is _not installed_ — it renders a "Not Installed" label, so do not emit it.
+- **Custom page templates** — SQ scans a user `storage/` folder for extra `.html` templates, so
+  house styles Franklin authors could be applied by name.
 
 #### 7c — Other module-dependent backlog ⛔ BLOCKED (2026-08-15)
 
@@ -2122,6 +2361,14 @@ Swarm`, `Hellknight` → `Skeletal Hellknight`, …). Worth generalising: **"lat
 Read against the **installed** module at
 `D:\FoundryData-Paizo\Data\modules\simple-quest` (manifest confirms **5.1.4**, compat
 min=14 verified=14), not from release notes.
+
+> **📍 Partly superseded by the 2026-08-16 design session — see Phase 7a above.** This section's
+> objective-key and `system.objectiveState` analysis is **confirmed correct** and the shipped
+> fixture is now the 0a gate's oracle. Two things here are corrected upstream in 7a: the page
+> subtype count is **11, not twelve**, and the reader blocker is a one-line branch fix rather than
+> the gating rebuild this section implies — SQ pages populate the core `text.content`, which we
+> simply never read. Read 7a first; keep this section for the flag-migration history and the
+> three dated corrections, which still stand.
 
 > **The previous revision of this section said "what survived: the flag shape" and scoped the
 > work as a key-derivation fix. Both halves of that were wrong.** The flag shape did not survive,
