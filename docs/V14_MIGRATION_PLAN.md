@@ -1876,6 +1876,52 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
 
+##### 7a.4 gate result — 10/10 + UI confirmed, 2026-08-17 (`set-quest-progress`, 54 → 55 tools)
+
+Fixture: the shared `MCP Gate Fixture` quest page. **Both halves ran**: 10 data checks through the
+control port, and the render confirmed by eye in the Simple Quest window.
+
+| #   | Check                                                  | Result                                 |
+| --- | ------------------------------------------------------ | -------------------------------------- |
+| 1-3 | checked → failed → unchecked, addressed by exact text  | `1 → 2 → 0`, stored and manifest agree |
+| 4   | Read-modify-write: neighbour untouched                 | unchanged                              |
+| 5   | Status by name                                         | `in-progress` → `0`                    |
+| 6   | **Append: pre-existing keys survive and stay checked** | 3 → 4 keys, victim still `1`           |
+| 7   | Appended text is inert                                 | `<ul><li>…` added **1** key, not 2     |
+| 8   | Unmatched selector fails loudly                        | `objective-not-found`, nothing moved   |
+| 9   | Unknown state refused, not coerced                     | valid values listed                    |
+| 10  | Non-quest page refused                                 |                                        |
+
+**UI confirmation (the half the tool response cannot give):** checked renders as a filled marker
+with strikethrough; **failed renders red** — red marker, red strikethrough — visibly distinct from
+checked; unchecked is an empty box. The appended objective appears and the previously-checked one
+**stays visibly ticked**. The smuggled `<ul><li>smuggled child</li></ul>` renders as literal text
+under a single checkbox, which is check 7's whole point. The sidebar incidentally showed
+`Lictor Ozrin` / `Kintargo` / `Moderate`, confirming 7a.2's fields and 7a.3's merge render too.
+
+###### ⚠️ The plan's append rule is true only at the top level
+
+The plan states appending an `<li>` is safe because existing objectives keep their text and so
+their slugs. **That holds only for a top-level append.** A key is the slug of the objective's
+_full_ `textContent`, descendants included, so adding a child _into_ an existing objective changes
+that parent's text and re-keys it — stranding its checkbox. Same mechanism as
+`the-tabsthe-header-shows-all-the-folders-containe`, working against us.
+
+Two consequences, both implemented: the insertion target is the last `<ul>` **with no `<li>`
+ancestor**, and appended objectives are inserted as **plain text, never markup** — otherwise a
+caller passing `<ul><li>…</li></ul>` re-keys the enclosing objective through the back door. Check 7
+is that fixture, and it discriminates: a parsed list would have added two keys and moved a parent's.
+Nesting under an existing objective is **refused**, not silently re-keyed; key migration is a bigger
+change than this cycle should make.
+
+###### Gate-running lesson: run UI checks one step at a time
+
+The first run executed the whole toggle sequence with timed pauses. By the time it was observed
+only the **end state** was visible, so the intermediate `failed` render was never seen — the run
+proved less than it appeared to. Re-run as a single step that stops and waits. **For any check whose
+evidence is transient, the harness must stop, not sleep** — a pause assumes the observer is already
+watching, and unobserved states leave no trace.
+
 ##### 7a.3 gate result — 11/11, 2026-08-17 (`update-simple-quest-page`, 53 → 54 tools)
 
 Fixture: **`MCP Gate Fixture`** journal (`d08x3jjHcWEjTjsy`) in `Quests`, quest page
@@ -2208,7 +2254,7 @@ image.
 **7a.3 — `update-simple-quest-page`. ✅ DONE, gate passed 11/11 2026-08-17.** Partial merge into `system`. Never a wholesale replace, and
 that has to be **enforced**, not documented.
 
-**7a.4 — `set-quest-progress`.** Owns `system.status`, `system.objectiveState`, and appending new
+**7a.4 — `set-quest-progress`. ✅ DONE, gate passed 10/10 + UI confirmed 2026-08-17.** Owns `system.status`, `system.objectiveState`, and appending new
 `<li>` objectives.
 
 > **Narrower guarantee than Phase 5's blanket refusal.** Appending an `<li>` is **safe**: every

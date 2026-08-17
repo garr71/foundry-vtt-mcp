@@ -118,6 +118,48 @@ export class SimpleQuestTools {
           required: ['journalId', 'pageId'],
         },
       },
+      {
+        name: 'set-quest-progress',
+        description:
+          'Record what happened at the table on a Simple Quest quest page: set the quest status, tick objectives checked/failed/unchecked, and append new objectives. Objectives are addressed by key, exact text, or index — a selector matching nothing fails loudly rather than guessing. Objective state is read-modify-write, so ticking one never disturbs the others. Appending adds top-level objectives only; nesting under an existing objective is refused because it would re-key the parent and strand its checkbox.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            journalId: { type: 'string', description: 'Journal containing the quest page.' },
+            pageId: { type: 'string', description: 'The simple-quest.quest page.' },
+            status: {
+              type: 'string',
+              description:
+                'Quest status: "undiscovered" (-1), "in-progress" (0), "completed" (1) or "failed" (2). Numbers accepted too.',
+            },
+            objectives: {
+              type: 'array',
+              description:
+                'Objectives to tick. Each needs a state plus one of key, text, or index.',
+              items: {
+                type: 'object',
+                properties: {
+                  key: { type: 'string', description: 'Objective key from the manifest.' },
+                  text: { type: 'string', description: 'Exact objective text.' },
+                  index: { type: 'number', description: 'Objective index, document order.' },
+                  state: {
+                    type: 'string',
+                    description: '"checked", "failed" or "unchecked" (or 1 / 2 / 0).',
+                  },
+                },
+                required: ['state'],
+              },
+            },
+            appendObjectives: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                'New objectives to add, as plain text (markup is not accepted — it could re-key existing objectives). Appended at the top level; existing objectives keep their state.',
+            },
+          },
+          required: ['journalId', 'pageId'],
+        },
+      },
     ];
   }
 
@@ -235,6 +277,51 @@ export class SimpleQuestTools {
         `Failed to update Simple Quest page: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
+      );
+    }
+  }
+
+  async handleSetQuestProgress(args: any): Promise<any> {
+    const schema = z.object({
+      journalId: z.string().min(1),
+      pageId: z.string().min(1),
+      status: z.union([z.string(), z.number()]).optional(),
+      objectives: z
+        .array(
+          z.object({
+            key: z.string().optional(),
+            text: z.string().optional(),
+            index: z.number().optional(),
+            state: z.union([z.string(), z.number()]),
+          })
+        )
+        .optional(),
+      appendObjectives: z.array(z.string()).optional(),
+    });
+
+    const request = schema.parse(args);
+
+    this.logger.info('Setting quest progress', {
+      pageId: request.pageId,
+      status: request.status,
+      objectiveCount: request.objectives?.length ?? 0,
+      appending: request.appendObjectives?.length ?? 0,
+    });
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.setQuestProgress', request);
+
+      // An unmatched selector comes back as a refusal listing every available objective —
+      // returned rather than thrown so that list survives ErrorHandler.handleToolError.
+      if (result && result.success === false) {
+        this.logger.info('Quest progress refused', { reason: result.reason });
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to set quest progress', error);
+      throw new Error(
+        `Failed to set quest progress: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

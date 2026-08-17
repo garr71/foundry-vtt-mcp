@@ -68,6 +68,7 @@ export class QueryHandlers {
       this.handleCreateSimpleQuestPage.bind(this);
     CONFIG.queries[`${modulePrefix}.updateSimpleQuestPage`] =
       this.handleUpdateSimpleQuestPage.bind(this);
+    CONFIG.queries[`${modulePrefix}.setQuestProgress`] = this.handleSetQuestProgress.bind(this);
     CONFIG.queries[`${modulePrefix}.updateJournalContent`] =
       this.handleUpdateJournalContent.bind(this);
 
@@ -743,6 +744,29 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to update Simple Quest page: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle quest progress (status, objective checkboxes, appended objectives)
+   */
+  async handleSetQuestProgress(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data?.journalId) throw new Error('journalId is required');
+      if (!data?.pageId) throw new Error('pageId is required');
+
+      return await this.dataAccess.setQuestProgress(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to set quest progress: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

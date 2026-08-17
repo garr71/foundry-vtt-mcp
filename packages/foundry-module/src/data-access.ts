@@ -4624,6 +4624,276 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Set quest progress: `system.status`, objective checkboxes, and appending new objectives.
+   *
+   * Owns `objectiveState` because it is an `ObjectField` — Foundry replaces those wholesale,
+   * so the only safe way to change one entry is read-modify-write, which is what happens
+   * here. `update-simple-quest-page` refuses the field for exactly that reason.
+   *
+   * ⚠️ **Appending is only safe at the top level, and that is not a stylistic preference.**
+   * An objective's key is the slug of its **full** `textContent`, descendants included. Add a
+   * child to an existing objective and the parent's text changes, so the parent re-keys and
+   * its stored checkbox is stranded. Appending a new top-level `<li>` touches no existing
+   * item's text and is therefore safe. Nested appends are refused rather than silently
+   * re-keying the parent; migrating keys is a bigger change than this cycle should make.
+   *
+   * New objectives are inserted as plain text, never as markup. That is a safety property,
+   * not a limitation: HTML would let a caller smuggle in a nested `<ul>` and re-key the
+   * enclosing objective through the back door.
+   */
+  async setQuestProgress(request: {
+    journalId: string;
+    pageId: string;
+    status?: number | string | undefined;
+    objectives?:
+      | Array<{
+          key?: string | undefined;
+          index?: number | undefined;
+          text?: string | undefined;
+          state: string | number;
+        }>
+      | undefined;
+    appendObjectives?: string[] | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('createActor', { quantity: 1 });
+    if (!permissionCheck.allowed) {
+      return { success: false, message: `Quest progress denied: ${permissionCheck.reason}` };
+    }
+
+    const journal = game.journal.get(request.journalId);
+    if (!journal) return { success: false, message: `Journal not found: ${request.journalId}` };
+
+    const page = journal.pages.get(request.pageId);
+    if (!page) return { success: false, message: `Page not found: ${request.pageId}` };
+
+    if (page.type !== SIMPLE_QUEST_QUEST_TYPE) {
+      return {
+        success: false,
+        message:
+          `Page "${page.name}" is type "${page.type}". Quest progress applies only to ` +
+          `${SIMPLE_QUEST_QUEST_TYPE} pages.`,
+      };
+    }
+
+    const STATE_NAMES: Record<string, number> = { unchecked: 0, checked: 1, failed: 2 };
+    const STATUS_NAMES: Record<string, number> = {
+      undiscovered: -1,
+      'in-progress': 0,
+      completed: 1,
+      failed: 2,
+    };
+
+    const update: Record<string, unknown> = {};
+    const applied: string[] = [];
+
+    // ---- status --------------------------------------------------------------------
+    if (request.status !== undefined) {
+      const status =
+        typeof request.status === 'number'
+          ? request.status
+          : STATUS_NAMES[String(request.status).toLowerCase()];
+
+      if (status === undefined || ![-1, 0, 1, 2].includes(status)) {
+        return {
+          success: false,
+          message:
+            `Unknown status "${request.status}". Use -1/0/1/2 or one of: ` +
+            `${Object.keys(STATUS_NAMES).join(', ')}.`,
+        };
+      }
+      update['system.status'] = status;
+      applied.push(`status -> ${status}`);
+    }
+
+    try {
+      const manifest = await this.parseQuestObjectives(page);
+
+      // ---- objective checkboxes ------------------------------------------------------
+      if (request.objectives?.length) {
+        // Read-modify-write. Never a bare assignment: objectiveState is an ObjectField and
+        // Foundry would replace the whole map, dropping every objective not named here.
+        const state: Record<string, number> = {
+          ...((page.system?.objectiveState as Record<string, number>) ?? {}),
+        };
+
+        for (const target of request.objectives) {
+          const wanted =
+            typeof target.state === 'number'
+              ? target.state
+              : STATE_NAMES[String(target.state).toLowerCase()];
+
+          if (wanted === undefined || ![0, 1, 2].includes(wanted)) {
+            return {
+              success: false,
+              message:
+                `Unknown objective state "${target.state}". Use 0/1/2 or one of: ` +
+                `${Object.keys(STATE_NAMES).join(', ')}.`,
+            };
+          }
+
+          // Exact matches only, and an unmatched selector fails loudly. Falling back to
+          // index 0 on a name that matched nothing is the defect this project has shipped
+          // five times; here it would tick the wrong objective at the table.
+          let matches: ObjectiveEntry[] = [];
+          let how = '';
+
+          if (target.key !== undefined) {
+            matches = manifest.objectives.filter(o => o.key === target.key);
+            how = `key "${target.key}"`;
+          } else if (target.text !== undefined) {
+            const needle = target.text.trim().toLowerCase();
+            matches = manifest.objectives.filter(o => o.text.trim().toLowerCase() === needle);
+            how = `text "${target.text}"`;
+          } else if (target.index !== undefined) {
+            matches = manifest.objectives.filter(o => o.index === target.index);
+            how = `index ${target.index}`;
+          } else {
+            return {
+              success: false,
+              message: 'Each objective needs one of: key, text, or index.',
+            };
+          }
+
+          if (matches.length === 0) {
+            return {
+              success: false,
+              refused: true,
+              reason: 'objective-not-found',
+              message:
+                `No objective matches ${how} on "${page.name}". Nothing was written. ` +
+                `Available objectives: ${manifest.objectives
+                  .map(o => `[${o.index}] "${o.text}" (${o.key})`)
+                  .join(' | ')}`,
+            };
+          }
+          if (matches.length > 1) {
+            return {
+              success: false,
+              refused: true,
+              reason: 'objective-ambiguous',
+              message:
+                `${matches.length} objectives match ${how} on "${page.name}". Nothing was ` +
+                `written. Address it by key or index instead: ${matches
+                  .map(o => `[${o.index}] ${o.key}`)
+                  .join(', ')}`,
+            };
+          }
+
+          const hit = matches[0]!;
+          state[hit.key] = wanted;
+          applied.push(`[${hit.index}] "${hit.text}" -> ${wanted}`);
+        }
+
+        update['system.objectiveState'] = state;
+      }
+
+      // ---- appending new objectives --------------------------------------------------
+      let appendedKeys: string[] = [];
+
+      if (request.appendObjectives?.length) {
+        const html = typeof page.text?.content === 'string' ? page.text.content : '';
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+
+        // A <ul> nested inside an <li> is part of that objective's text. Appending there
+        // would change the ancestor's textContent and therefore its key, stranding its
+        // checkbox — so only a list with no <li> ancestor is a valid target.
+        const topLevelLists = Array.from(doc.querySelectorAll('ul')).filter(
+          ul => !ul.parentElement?.closest('li')
+        );
+
+        let list = topLevelLists[topLevelLists.length - 1] ?? null;
+        if (!list) {
+          list = doc.createElement('ul');
+          doc.body.appendChild(list);
+        }
+
+        for (const objectiveText of request.appendObjectives) {
+          const li = doc.createElement('li');
+          const p = doc.createElement('p');
+          // textContent, never innerHTML: markup could carry a nested <ul> and re-key the
+          // enclosing objective.
+          p.textContent = objectiveText;
+          li.appendChild(p);
+          list.appendChild(li);
+        }
+
+        const newHtml = doc.body.innerHTML;
+
+        // Backstop, because the guarantee above is a claim about DOM behaviour and this is
+        // cheap: re-key the proposed body and confirm nothing carrying state was lost.
+        const before = manifest.objectives.filter(o => o.state !== 0 || o.secret);
+        const proposed = await this.parseObjectivesFromHtml(
+          newHtml,
+          (page.system?.objectiveState as Record<string, number>) ?? {},
+          (page.system?.objectiveSecrets as Record<string, boolean>) ?? {},
+          page
+        );
+        const proposedKeys = new Set(proposed.objectives.map(o => o.key));
+        const stranded = before.filter(o => !proposedKeys.has(o.key)).map(o => o.key);
+
+        if (stranded.length > 0) {
+          return {
+            success: false,
+            refused: true,
+            reason: 'append-would-orphan',
+            strandedKeys: stranded,
+            message:
+              `Refused: appending these objectives would re-key ${stranded.length} existing ` +
+              `objective(s) that carry state — ${stranded.join(', ')}. That happens when the ` +
+              `insertion point sits inside an existing objective, whose key is the slug of ` +
+              `its whole subtree. Nothing was written.`,
+          };
+        }
+
+        appendedKeys = proposed.objectives
+          .map(o => o.key)
+          .filter(k => !manifest.objectives.some(o => o.key === k));
+
+        update['text.content'] = newHtml;
+        applied.push(`appended ${request.appendObjectives.length} objective(s)`);
+      }
+
+      if (Object.keys(update).length === 0) {
+        return {
+          success: false,
+          message: 'Nothing to do: provide status, objectives, or appendObjectives.',
+        };
+      }
+
+      await page.update(update);
+
+      const after = await this.parseQuestObjectives(page);
+      this.auditLog('setQuestProgress', request, 'success');
+
+      return {
+        success: true,
+        pageId: page.id,
+        pageName: page.name,
+        journalId: journal.id,
+        status: page.system?.status,
+        applied,
+        appendedKeys,
+        objectives: after,
+      };
+    } catch (error) {
+      this.auditLog(
+        'setQuestProgress',
+        request,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      return {
+        success: false,
+        message: `Failed to set quest progress: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  /**
    * Resolve the page types this world will accept, and say where each came from.
    *
    * `Document.TYPES` reads `game.model`, which is built from the system and active modules.

@@ -1834,6 +1834,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'set-quest-progress':
+                  result = await simpleQuestTools.handleSetQuestProgress(args);
+
+                  break;
+
                 // Playlist tools
                 case 'list-playlists':
                   result = await playlistTools.handleListPlaylists(args);
