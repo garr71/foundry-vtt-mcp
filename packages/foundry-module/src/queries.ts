@@ -64,6 +64,8 @@ export class QueryHandlers {
       this.handleGetJournalPageContent.bind(this);
     CONFIG.queries[`${modulePrefix}.getSimpleQuestContext`] =
       this.handleGetSimpleQuestContext.bind(this);
+    CONFIG.queries[`${modulePrefix}.createSimpleQuestPage`] =
+      this.handleCreateSimpleQuestPage.bind(this);
     CONFIG.queries[`${modulePrefix}.updateJournalContent`] =
       this.handleUpdateJournalContent.bind(this);
 
@@ -693,6 +695,29 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to get Simple Quest context: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle Simple Quest page creation
+   */
+  async handleCreateSimpleQuestPage(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data?.type) throw new Error('type is required');
+      if (!data?.name) throw new Error('name is required');
+
+      return await this.dataAccess.createSimpleQuestPage(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to create Simple Quest page: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

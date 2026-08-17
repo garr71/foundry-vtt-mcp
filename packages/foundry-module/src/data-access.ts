@@ -4174,6 +4174,226 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Create one Simple Quest page.
+   *
+   * **Defaults deliberately diverge from Simple Quest's own, and the divergence is the
+   * point.** SQ's schema initialises `status` to `0` / In Progress
+   * (`JournalPageQuest.js` L34-38). For prep that is wrong: a quest written three weeks
+   * early would sit hidden but labelled "In Progress" and drop into the wrong Quest Recap
+   * group the moment access was granted. Prep defaults here are **hidden and undiscovered**:
+   * `status: -1`, ownership NONE on both levels, objectives secret.
+   *
+   * Ownership is set on the **journal and the page**. A player needs OBSERVER on the
+   * JournalEntry to see it in the sidebar at all, so granting one level and not the other
+   * produces a page that every field read confirms and no player can reach.
+   *
+   * Objective secrets are applied in a **second pass, after the page exists**, deliberately.
+   * The keys are slugs derived from the rendered `<li>` text, and deriving them from the
+   * submitted string would risk a different answer than the one Simple Quest computes from
+   * the real page. Correctness beats the extra round trip.
+   */
+  async createSimpleQuestPage(request: {
+    type: string;
+    name: string;
+    text?: string | undefined;
+    system?: Record<string, unknown> | undefined;
+    journalId?: string | undefined;
+    folder?: string | undefined;
+    journalName?: string | undefined;
+    visibleToPlayers?: boolean | undefined;
+    secretObjectives?: boolean | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('createActor', { quantity: 1 });
+    if (!permissionCheck.allowed) {
+      return { success: false, message: `Page creation denied: ${permissionCheck.reason}` };
+    }
+
+    const moduleId = 'simple-quest';
+    const module = game.modules?.get(moduleId);
+    if (!module?.active) {
+      return {
+        success: false,
+        message: `The "${moduleId}" module is not active in this world; its page types do not exist.`,
+      };
+    }
+
+    if (!request.type?.startsWith(`${moduleId}.`)) {
+      return {
+        success: false,
+        message:
+          `This tool creates Simple Quest pages only; "${request.type}" is not one. ` +
+          `Use update-quest-journal with pageType for other page types.`,
+      };
+    }
+
+    const knownTypes = this.getJournalPageTypes();
+    if (!knownTypes.includes(request.type)) {
+      return {
+        success: false,
+        message:
+          `Unknown page type "${request.type}". Available Simple Quest types: ` +
+          `${knownTypes.filter(t => t.startsWith(`${moduleId}.`)).join(', ')}.`,
+      };
+    }
+
+    // Validate what the caller sent BEFORE merging our defaults in, so a rejection names
+    // their key and never one of ours.
+    const check = this.validateSystemData(request.type, request.system);
+    if (!check.valid) {
+      return {
+        success: false,
+        rejected: check.rejected,
+        accepted: check.accepted,
+        message: check.message,
+      };
+    }
+
+    const visible = request.visibleToPlayers === true;
+    // 0 is NONE, an explicit denial. Page ownership defaults to -1 (inherit) in core, which
+    // would silently follow whatever the journal says later.
+    const ownership = { default: visible ? 2 : 0 };
+
+    try {
+      // ---- resolve the target journal ----------------------------------------------
+      let journal: any = null;
+      let createdJournal = false;
+
+      if (request.journalId) {
+        journal = game.journal.get(request.journalId);
+        if (!journal) {
+          return { success: false, message: `Journal not found: ${request.journalId}` };
+        }
+      } else if (request.folder) {
+        const folders = Array.from<any>(game.folders ?? []).filter(
+          (f: any) => f.type === 'JournalEntry'
+        );
+        // Exact name match before id, and never a substring match. Resolving a folder by
+        // "contains" is the defect this project has now shipped five times.
+        const folder =
+          folders.find((f: any) => f.id === request.folder) ??
+          folders.find((f: any) => f.name === request.folder);
+
+        if (!folder) {
+          return {
+            success: false,
+            message:
+              `No JournalEntry folder matches "${request.folder}" exactly. ` +
+              `Available: ${folders.map((f: any) => f.name).join(', ')}.`,
+          };
+        }
+
+        journal = await JournalEntry.create({
+          name: request.journalName || request.name,
+          folder: folder.id,
+          ownership,
+        });
+        createdJournal = true;
+
+        if (!journal) {
+          return { success: false, message: 'Failed to create the containing journal.' };
+        }
+      } else {
+        return {
+          success: false,
+          message: 'Provide either journalId (an existing journal) or folder (to create one in).',
+        };
+      }
+
+      // ---- build the page ------------------------------------------------------------
+      const system: Record<string, unknown> = { ...(request.system ?? {}) };
+      const appliedDefaults: string[] = [];
+
+      // The prep default. Only meaningful on quest pages, and only when the caller was
+      // silent — an explicit status always wins.
+      if (request.type === SIMPLE_QUEST_QUEST_TYPE && system.status === undefined) {
+        system.status = -1;
+        appliedDefaults.push('system.status=-1 (Undiscovered)');
+      }
+
+      const created = await journal.createEmbeddedDocuments('JournalEntryPage', [
+        {
+          type: request.type,
+          name: request.name,
+          text: { content: request.text ?? '' },
+          ownership,
+          ...(Object.keys(system).length > 0 ? { system } : {}),
+        },
+      ]);
+
+      const page = created?.[0];
+      if (!page) {
+        return { success: false, message: 'Page creation returned no document.' };
+      }
+      appliedDefaults.push(
+        `ownership.default=${ownership.default} (${visible ? 'observer' : 'none'})`
+      );
+
+      // If the journal already existed and is visible to players while the page is not,
+      // say so — the page is hidden, but the journal is not, and that asymmetry is exactly
+      // what the two-level ownership trap looks like from the outside.
+      const journalDefault = journal.ownership?.default;
+      const ownershipNote =
+        !createdJournal && !visible && typeof journalDefault === 'number' && journalDefault > 0
+          ? `The containing journal "${journal.name}" is visible to players (ownership.default=${journalDefault}); this page is not. Players will see the journal but not this page.`
+          : undefined;
+
+      // ---- second pass: make objectives secret --------------------------------------
+      let objectives: ObjectiveManifest | undefined;
+      let secretsApplied = 0;
+
+      if (request.type === SIMPLE_QUEST_QUEST_TYPE) {
+        objectives = await this.parseQuestObjectives(page);
+
+        if (request.secretObjectives !== false && objectives.objectives.length > 0) {
+          const secrets: Record<string, boolean> = {
+            ...((page.system?.objectiveSecrets as Record<string, boolean>) ?? {}),
+          };
+          for (const objective of objectives.objectives) secrets[objective.key] = true;
+
+          await page.update({ 'system.objectiveSecrets': secrets });
+          secretsApplied = Object.keys(secrets).length;
+          appliedDefaults.push(`${secretsApplied} objective(s) marked secret`);
+          objectives = await this.parseQuestObjectives(page);
+        }
+      }
+
+      this.auditLog('createSimpleQuestPage', request, 'success');
+
+      return {
+        success: true,
+        pageId: page.id,
+        // Read back from the document, never echoed from the request: an echo would report
+        // a page we did not create if Foundry coerced or rejected the type.
+        pageType: page.type,
+        pageName: page.name,
+        journalId: journal.id,
+        journalName: journal.name,
+        createdJournal,
+        visibleToPlayers: visible,
+        appliedDefaults,
+        secretsApplied,
+        ...(objectives ? { objectives } : {}),
+        ...(ownershipNote ? { ownershipNote } : {}),
+      };
+    } catch (error) {
+      this.auditLog(
+        'createSimpleQuestPage',
+        request,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      return {
+        success: false,
+        message: `Failed to create Simple Quest page: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  /**
    * Resolve the page types this world will accept, and say where each came from.
    *
    * `Document.TYPES` reads `game.model`, which is built from the system and active modules.
@@ -4496,6 +4716,8 @@ export class FoundryDataAccess {
     contentSource: 'text.content' | 'src' | 'none';
     system?: Record<string, unknown>;
     objectives?: ObjectiveManifest;
+    ownership?: Record<string, number>;
+    journalOwnership?: Record<string, number>;
   } | null> {
     this.validateFoundryState();
 
@@ -4534,6 +4756,13 @@ export class FoundryDataAccess {
         ? (page.system.toObject() as Record<string, unknown>)
         : undefined;
 
+    // Both levels, always. A player needs OBSERVER on the JournalEntry to see the page in
+    // the sidebar at all, so page ownership alone answers half the question — and it is the
+    // half that reads as success while the player sees nothing. Returning only one of these
+    // would make every visibility check here unfalsifiable.
+    const ownership = page.ownership ? { ...page.ownership } : undefined;
+    const journalOwnership = journal.ownership ? { ...journal.ownership } : undefined;
+
     return {
       id: page.id || '',
       name: page.name || '',
@@ -4541,6 +4770,8 @@ export class FoundryDataAccess {
       content,
       contentSource,
       ...(system ? { system } : {}),
+      ...(ownership ? { ownership } : {}),
+      ...(journalOwnership ? { journalOwnership } : {}),
       ...(type === SIMPLE_QUEST_QUEST_TYPE
         ? { objectives: await this.parseQuestObjectives(page) }
         : {}),

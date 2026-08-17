@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { FoundryClient } from '../foundry-client.js';
 import { Logger } from '../logger.js';
 
@@ -34,6 +35,59 @@ export class SimpleQuestTools {
           properties: {},
         },
       },
+      {
+        name: 'create-simple-quest-page',
+        description:
+          'Create one Simple Quest page (quest, lore, character, creature, faction, location, event, era, achievement). Call get-simple-quest-context first for the exact system field names. IMPORTANT — defaults are for PREP and deliberately differ from the Simple Quest module\'s own: the page is created hidden from players (ownership none on both journal and page), a quest page gets status -1 (Undiscovered) rather than the module default 0 (In Progress), and every objective in the body is marked secret. Pass visibleToPlayers: true to create it already visible, or reveal later with the visibility tool. Body prose goes in "text" as HTML; quest objectives are <li> items in that HTML. One page per call.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            type: {
+              type: 'string',
+              description:
+                'Page type, fully qualified, e.g. "simple-quest.quest" or "simple-quest.lore".',
+            },
+            name: { type: 'string', description: 'Page name.' },
+            text: {
+              type: 'string',
+              description:
+                'Page body as HTML. For a quest, each objective is an <li>; nested <ul> makes sub-objectives.',
+            },
+            system: {
+              type: 'object',
+              description:
+                'Type-specific fields, e.g. {"questGiver":"Aldern","difficulty":"Moderate"}. Validated against the live data model — unknown keys are refused by name and nothing is written. Omit "status" to get the prep default of -1.',
+            },
+            journalId: {
+              type: 'string',
+              description: 'Add the page to this existing journal. Use this or "folder".',
+            },
+            folder: {
+              type: 'string',
+              description:
+                'Journal folder id or EXACT name (e.g. "Quests") to create a new journal in. Get folder names from get-simple-quest-context.',
+            },
+            journalName: {
+              type: 'string',
+              description:
+                'Name for the new journal when using "folder". Defaults to the page name.',
+            },
+            visibleToPlayers: {
+              type: 'boolean',
+              description:
+                'If true, players get OBSERVER on both the journal and the page. Default false (prep: hidden).',
+              default: false,
+            },
+            secretObjectives: {
+              type: 'boolean',
+              description:
+                'Quest pages only. If true (default), every objective in the body starts secret so it can be revealed as earned. Set false to create them all visible.',
+              default: true,
+            },
+          },
+          required: ['type', 'name'],
+        },
+      },
     ];
   }
 
@@ -55,6 +109,56 @@ export class SimpleQuestTools {
       this.logger.error('Failed to read Simple Quest context', error);
       throw new Error(
         `Failed to read Simple Quest context: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  async handleCreateSimpleQuestPage(args: any): Promise<any> {
+    const schema = z.object({
+      type: z.string().min(1),
+      name: z.string().min(1),
+      text: z.string().optional(),
+      system: z.record(z.unknown()).optional(),
+      journalId: z.string().optional(),
+      folder: z.string().optional(),
+      journalName: z.string().optional(),
+      visibleToPlayers: z.boolean().default(false),
+      secretObjectives: z.boolean().default(true),
+    });
+
+    const request = schema.parse(args);
+
+    this.logger.info('Creating Simple Quest page', {
+      type: request.type,
+      name: request.name,
+      target: request.journalId ?? request.folder,
+      visibleToPlayers: request.visibleToPlayers,
+    });
+
+    try {
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.createSimpleQuestPage',
+        request
+      );
+
+      // Refusals arrive as { success: false, message, rejected? } and are passed straight
+      // through. Throwing would route them into ErrorHandler.handleToolError, which
+      // substitutes a generic template — and for a schema rejection the message IS the
+      // documentation, since it names the bad keys and lists the real ones.
+      if (result && result.success === false) {
+        this.logger.info('Simple Quest page creation refused', {
+          message: result.message,
+          rejected: result.rejected,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to create Simple Quest page', error);
+      throw new Error(
+        `Failed to create Simple Quest page: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );

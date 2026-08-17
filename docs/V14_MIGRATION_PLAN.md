@@ -1876,6 +1876,49 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
 
+##### 7a.2 gate result — 10/10, 2026-08-17 (`create-simple-quest-page`, 52 → 53 tools)
+
+Writes landed in the **Quests** folder at Franklin's direction (easy to delete afterwards).
+
+| #   | Check                                             | Result                                 |
+| --- | ------------------------------------------------- | -------------------------------------- |
+| 1   | **`status` omitted entirely → `-1`**              | `-1`, not SQ's default `0`             |
+| 2   | Type read back from the document, not echoed      | `simple-quest.quest` both sides        |
+| 3   | Caller's `system` survives alongside our defaults | `questGiver`, `difficulty` intact      |
+| 4   | Every objective secret by default                 | 3 of 3                                 |
+| 5   | Nesting survives creation                         | `d0 · d1→parent 0 · d0`                |
+| 6   | Hidden on page **and** journal                    | both `ownership.default=0`             |
+| 7   | **Branch not taken:** `visibleToPlayers:true`     | both levels `=2`; lore has no `status` |
+| 8   | `secretObjectives:false` honoured                 | `objectiveSecrets={}`                  |
+| 9   | Unknown `system` key still refused by name        | `rejected:["description"]`             |
+| 10  | Folder resolves **exactly**                       | `"Quest"` does not match `"Quests"`    |
+
+**Check 1 is the cycle's real test and it only works because the argument is absent.** Passing
+`-1` explicitly would pass against SQ's own default of `0` too, so the omission is the evidence.
+
+The parent objective keyed as `question-the-harbourmasterfind-the-dock-ledger`, confirming on fresh
+content the nested-descent behaviour that 0a established from the shipped fixture.
+
+###### The gate could not fail checks 6 and 7 on the first run
+
+Both came back `ownership.default=undefined`: the 0a reader never returned ownership at all, so a
+visibility assertion had no way to observe the axis it was testing. **Neither check could have
+passed no matter what the tool wrote** — the classic unfalsifiable test, caught only because the
+expected value was pinned rather than merely eyeballed.
+
+Fixed by returning `ownership` **and** `journalOwnership` from `getJournalPageContent`. Both,
+deliberately: a player needs OBSERVER on the JournalEntry to see the page in the sidebar at all, so
+page ownership alone answers the half that reads as success while the player sees nothing. 7a.5
+needs both anyway.
+
+**Scope note:** ownership here is verified as _fields_, which is the right question for "did the
+write land". It is **not** proof a player cannot see the page — that check belongs to 7a.5 and must
+come from a real player login, per the two-level ownership trap.
+
+**Deliberately not built, so it is not mistaken for missing:** the `template` parameter (SQ's twelve
+`templates/JournalTemplates/*.html`) and auto-hiding pre-populated _block_ list items. Both belong
+with 7a.3/7a.5, which actually manage block items.
+
 ##### 7a.1 gate result — 10/10, 2026-08-16 (`get-simple-quest-context`, 51 → 52 tools)
 
 Read-only gate. Simple Quest 5.1.4, `schemaSource: simple-quest.api.exportAllSchemas`.
@@ -2114,7 +2157,7 @@ nothing — the house failure mode, stated in the response instead of left to be
 plus the folder/tab structure (root + the five `simpleQuestDir`-flagged folders + tab folders with
 their icons). Read-only, cheap, and makes the write tools self-describing.
 
-**7a.2 — `create-simple-quest-page`.** One page per call, deliberately: Franklin batches at the
+**7a.2 — `create-simple-quest-page`. ✅ DONE, gate passed 10/10 2026-08-17.** One page per call, deliberately: Franklin batches at the
 thinking/vault level, and one-at-a-time gives the assistant a chance to read back what it made and
 catch errors per page. Parameters: journal or folder target, `type`, `name`, `text`, `system`,
 optional `template` (by name, with real image paths substituted for the unsplash placeholder) and
