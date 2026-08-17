@@ -88,6 +88,36 @@ export class SimpleQuestTools {
           required: ['type', 'name'],
         },
       },
+      {
+        name: 'update-simple-quest-page',
+        description:
+          'Update an existing Simple Quest page. System fields MERGE — fields you do not name keep their current values. Use this for prose and metadata (questGiver, difficulty, location, tags, block content). It will NOT touch objectiveState (use set-quest-progress) or ownership (use the visibility tool), and it refuses a body rewrite that would strand objective state, since Simple Quest keys objective checkboxes by a slug of the objective text. Appending new objectives is safe and allowed. Returns which system fields changed and which did not.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            journalId: { type: 'string', description: 'Journal containing the page.' },
+            pageId: { type: 'string', description: 'Page to update. Get ids from list-journals.' },
+            name: { type: 'string', description: 'New page name (optional).' },
+            text: {
+              type: 'string',
+              description:
+                'Replacement body HTML (optional). On a quest page, rewriting or reordering existing <li> objectives is refused when it would strand stored state; appending is fine.',
+            },
+            system: {
+              type: 'object',
+              description:
+                'Partial system fields to merge, e.g. {"difficulty":"Severe"}. Unknown keys are refused by name and nothing is written. Foundry "-=" unset syntax is refused.',
+            },
+            allowOrphanedObjectives: {
+              type: 'boolean',
+              description:
+                'Only if you intend to lose objective state that a body rewrite would strand. Default false.',
+              default: false,
+            },
+          },
+          required: ['journalId', 'pageId'],
+        },
+      },
     ];
   }
 
@@ -159,6 +189,50 @@ export class SimpleQuestTools {
       this.logger.error('Failed to create Simple Quest page', error);
       throw new Error(
         `Failed to create Simple Quest page: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
+  }
+
+  async handleUpdateSimpleQuestPage(args: any): Promise<any> {
+    const schema = z.object({
+      journalId: z.string().min(1),
+      pageId: z.string().min(1),
+      name: z.string().optional(),
+      text: z.string().optional(),
+      system: z.record(z.unknown()).optional(),
+      allowOrphanedObjectives: z.boolean().default(false),
+    });
+
+    const request = schema.parse(args);
+
+    this.logger.info('Updating Simple Quest page', {
+      pageId: request.pageId,
+      fields: Object.keys(request.system ?? {}),
+      rewritingBody: request.text !== undefined,
+    });
+
+    try {
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.updateSimpleQuestPage',
+        request
+      );
+
+      // Refusals carry the reason and, for an orphan refusal, the current objective list —
+      // returned rather than thrown so none of that is replaced by a generic template.
+      if (result && result.success === false) {
+        this.logger.info('Simple Quest page update refused', {
+          reason: result.reason,
+          rejected: result.rejected ?? result.strandedKeys,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to update Simple Quest page', error);
+      throw new Error(
+        `Failed to update Simple Quest page: ${
           error instanceof Error ? error.message : 'Unknown error'
         }`
       );

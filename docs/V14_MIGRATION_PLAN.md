@@ -1876,6 +1876,42 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
 
+##### 7a.3 gate result — 11/11, 2026-08-17 (`update-simple-quest-page`, 53 → 54 tools)
+
+Fixture: **`MCP Gate Fixture`** journal (`d08x3jjHcWEjTjsy`) in `Quests`, quest page
+`5n2UZX24wYSSB0C0`. **Reused across runs and by 7a.4/7a.5** rather than created fresh each time —
+the earlier gates left a journal per run behind, and there is no delete tool to clean up with.
+
+| #   | Check                                                   | Result                                      |
+| --- | ------------------------------------------------------- | ------------------------------------------- |
+| 1   | **Away:** `questGiver` moved off its resting value      | Lictor Ozrin → Nox the Fence                |
+| 2   | **Merge, not replace:** unnamed fields survive          | `difficulty`, `location` + 9 more untouched |
+| 3   | **Back:** restored                                      | Lictor Ozrin                                |
+| 4   | SetField **write** round-trips as an array              | `["gate","hellknights"]` on a lore page     |
+| 4b  | Same key refused on quest, which has no `tags`          | per-type schema, not a global allowlist     |
+| 5   | Appending an objective is allowed                       | 3 objectives, existing slugs intact         |
+| 6   | **Enforced:** stranding rewrite refused, body unchanged | 2 keys named, `bodyUnchanged=true`          |
+| 7   | `objectiveState` refused — owned by 7a.4                |                                             |
+| 8   | Foundry `-=` unset syntax refused                       | `questGiver` still present                  |
+| 9   | Unknown key refused by name                             | `["description"]`                           |
+| 10  | Non-Simple-Quest page refused                           | module journals stay read-only              |
+
+**Check 2 is the one that fails if the merge is really a replace**: it writes `questGiver` alone and
+asserts everything else survived. Check 6 asserts the body is byte-identical afterwards, so
+"refused" has to mean nothing was written rather than merely looking unhappy.
+
+###### ⚠️ This phase's own gate line for `tags` was wrong
+
+The plan said "Read `system.tags` back and assert it is an array, not `{}`" as part of cycle 3. **A
+quest page has no `tags` field** — 7a.1's inventory lists its 12 fields and `tags` is not among
+them; it lives on lore, character, faction, location, creature and map. The first run scored that as
+a failure when the tool had in fact refused the key by name, which is the correct answer.
+
+Corrected by testing the SetField **write** path where the field exists (lore), and keeping the
+quest refusal as check 4b. That pair is stronger than the original line: together they show the
+validation is reading a **per-type** live schema rather than a global allowlist. 0a had proved the
+SetField read path; this proves the write path.
+
 ##### 7a.2 gate result — 10/10, 2026-08-17 (`create-simple-quest-page`, 52 → 53 tools)
 
 Writes landed in the **Quests** folder at Franklin's direction (easy to delete afterwards).
@@ -2169,7 +2205,7 @@ image.
 > was granted. Our defaults: **`status: -1`, page ownership none, list items hidden, objectives
 > secret.** This must be stated in the tool description, because it contradicts the module.
 
-**7a.3 — `update-simple-quest-page`.** Partial merge into `system`. Never a wholesale replace, and
+**7a.3 — `update-simple-quest-page`. ✅ DONE, gate passed 11/11 2026-08-17.** Partial merge into `system`. Never a wholesale replace, and
 that has to be **enforced**, not documented.
 
 **7a.4 — `set-quest-progress`.** Owns `system.status`, `system.objectiveState`, and appending new

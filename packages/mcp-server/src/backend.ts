@@ -1829,6 +1829,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'update-simple-quest-page':
+                  result = await simpleQuestTools.handleUpdateSimpleQuestPage(args);
+
+                  break;
+
                 // Playlist tools
                 case 'list-playlists':
                   result = await playlistTools.handleListPlaylists(args);

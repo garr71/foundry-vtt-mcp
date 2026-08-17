@@ -4394,6 +4394,236 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Update one Simple Quest page. Partial merge into `system`, never a wholesale replace.
+   *
+   * "Never a replace" is **enforced here, not documented and hoped for**. Four guards, each
+   * closing a way this silently destroys data:
+   *
+   * 1. **`-=` deletion keys are refused.** Foundry treats `-=field` in an update as "unset
+   *    this", so a caller reaching for it turns a merge into a partial wipe.
+   * 2. **`objectiveState` and `objectiveSecrets` are refused.** Both are `ObjectField`s,
+   *    which Foundry replaces wholesale rather than merging — passing one with a single key
+   *    would drop every other objective's state. They belong to the progress and visibility
+   *    tools, which do a read-modify-write.
+   * 3. **`ownership` is not writable here.** It is the visibility tool's axis, and setting it
+   *    on one level only is the two-level trap.
+   * 4. **A body rewrite that would orphan objective state is refused.** Objective keys are
+   *    slugs of the objective text, so editing that text rehomes every stored checkbox with
+   *    no error. The proposed body is keyed *before* it is written and compared against the
+   *    keys that currently carry state; anything that would be stranded is named, and the
+   *    write is refused unless the caller explicitly accepts the loss.
+   *
+   * Guard 4 is deliberately narrower than Phase 5's blanket `replaceContent` refusal:
+   * appending an objective is safe, because every existing `<li>` keeps its text and
+   * therefore its slug. Only rewriting or reordering existing objective text is destructive,
+   * and that is the case this detects rather than assuming.
+   */
+  async updateSimpleQuestPage(request: {
+    journalId: string;
+    pageId: string;
+    name?: string | undefined;
+    text?: string | undefined;
+    system?: Record<string, unknown> | undefined;
+    allowOrphanedObjectives?: boolean | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('createActor', { quantity: 1 });
+    if (!permissionCheck.allowed) {
+      return { success: false, message: `Page update denied: ${permissionCheck.reason}` };
+    }
+
+    const journal = game.journal.get(request.journalId);
+    if (!journal) {
+      return { success: false, message: `Journal not found: ${request.journalId}` };
+    }
+
+    const page = journal.pages.get(request.pageId);
+    if (!page) {
+      return { success: false, message: `Page not found: ${request.pageId}` };
+    }
+
+    if (!String(page.type).startsWith('simple-quest.')) {
+      return {
+        success: false,
+        message:
+          `Page "${page.name}" is type "${page.type}", not a Simple Quest page. ` +
+          `This tool is scoped to Simple Quest pages; module-authored journals are read-only.`,
+      };
+    }
+
+    const system = request.system ?? {};
+
+    // Guard 1 — deletion keys.
+    const deletionKeys = Object.keys(system).filter(k => k.startsWith('-='));
+    if (deletionKeys.length > 0) {
+      return {
+        success: false,
+        refused: true,
+        reason: 'deletion-keys',
+        message:
+          `Refused: ${deletionKeys.join(', ')} use Foundry's "-=" unset syntax, which removes ` +
+          `fields rather than merging them. This tool only merges. Nothing was written.`,
+      };
+    }
+
+    // Guard 2 — ObjectFields that replace rather than merge.
+    const ownedElsewhere = ['objectiveState', 'objectiveSecrets'].filter(k => k in system);
+    if (ownedElsewhere.length > 0) {
+      return {
+        success: false,
+        refused: true,
+        reason: 'owned-by-another-tool',
+        rejected: ownedElsewhere,
+        message:
+          `Refused: ${ownedElsewhere.join(' and ')} are ObjectFields, which Foundry replaces ` +
+          `wholesale instead of merging — writing one here would drop every objective not ` +
+          `named in the call. Use set-quest-progress for objectiveState and the visibility ` +
+          `tool for objectiveSecrets; both read-modify-write. Nothing was written.`,
+      };
+    }
+
+    // Guard 3 — ownership belongs to the visibility axis.
+    if ('ownership' in (request as Record<string, unknown>)) {
+      return {
+        success: false,
+        refused: true,
+        reason: 'ownership-not-writable-here',
+        message:
+          `Refused: ownership is not writable through this tool. Setting it on the page but ` +
+          `not the journal leaves a page every field read confirms and no player can open. ` +
+          `Use the visibility tool, which sets both levels.`,
+      };
+    }
+
+    const check = this.validateSystemData(page.type, system);
+    if (!check.valid) {
+      return {
+        success: false,
+        refused: true,
+        reason: 'unknown-system-keys',
+        rejected: check.rejected,
+        accepted: check.accepted,
+        message: check.message,
+      };
+    }
+
+    try {
+      // Guard 4 — would this body rewrite strand stored objective state?
+      let orphanWarning: Record<string, unknown> | undefined;
+
+      if (request.text !== undefined && page.type === SIMPLE_QUEST_QUEST_TYPE) {
+        const state: Record<string, number> = page.system?.objectiveState ?? {};
+        const secrets: Record<string, boolean> = page.system?.objectiveSecrets ?? {};
+
+        // Only keys actually carrying something are at stake. A key stored as unchecked and
+        // not secret is indistinguishable from absent, so losing it costs nothing and
+        // refusing on it would block harmless edits.
+        const carrying = new Set(
+          [...Object.keys(state), ...Object.keys(secrets)].filter(
+            k => (state[k] ?? 0) !== 0 || secrets[k] === true
+          )
+        );
+
+        const proposed = await this.parseObjectivesFromHtml(request.text, state, secrets, page);
+        const proposedKeys = new Set(proposed.objectives.map(o => o.key));
+        const stranded = Array.from(carrying).filter(k => !proposedKeys.has(k));
+
+        if (stranded.length > 0) {
+          if (request.allowOrphanedObjectives !== true) {
+            const current = await this.parseQuestObjectives(page);
+            return {
+              success: false,
+              refused: true,
+              reason: 'would-orphan-objective-state',
+              strandedKeys: stranded,
+              message:
+                `Refused: this body would strand ${stranded.length} objective(s) that carry ` +
+                `state — ${stranded.join(', ')}. Simple Quest keys objective state by a slug ` +
+                `of the objective text, so rewriting or reordering existing objectives ` +
+                `silently resets their checkboxes and secrets. Appending new objectives is ` +
+                `safe and is not refused. Nothing was written. Pass ` +
+                `allowOrphanedObjectives: true to accept the loss deliberately.`,
+              currentObjectives: current.objectives.map(o => ({
+                key: o.key,
+                text: o.text,
+                state: o.state,
+                secret: o.secret,
+              })),
+            };
+          }
+          orphanWarning = {
+            orphanedByThisWrite: stranded,
+            note: 'allowOrphanedObjectives was set; the state on these keys is now unreachable.',
+          };
+        }
+      }
+
+      // Snapshot before, so the response can show what actually moved rather than what was
+      // asked for. `toObject()` again, because SetFields serialise to {} otherwise.
+      const before: Record<string, unknown> =
+        typeof page.system?.toObject === 'function' ? page.system.toObject() : {};
+
+      const update: Record<string, unknown> = {};
+      if (request.name !== undefined) update.name = request.name;
+      if (request.text !== undefined) update['text.content'] = request.text;
+      // Dotted paths, one per leaf: `{system: {...}}` would hand Foundry a whole object and
+      // let an ObjectField inside it replace rather than merge.
+      for (const [key, value] of Object.entries(system)) update[`system.${key}`] = value;
+
+      if (Object.keys(update).length === 0) {
+        return {
+          success: false,
+          message: 'Nothing to update: provide at least one of name, text, or system.',
+        };
+      }
+
+      await page.update(update);
+
+      const after: Record<string, unknown> =
+        typeof page.system?.toObject === 'function' ? page.system.toObject() : {};
+
+      // Report every system field that moved, and prove the untouched ones did not. This is
+      // what makes "merge, not replace" checkable from the response alone.
+      const changed: Record<string, { from: unknown; to: unknown }> = {};
+      for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+          changed[key] = { from: before[key], to: after[key] };
+        }
+      }
+
+      this.auditLog('updateSimpleQuestPage', request, 'success');
+
+      return {
+        success: true,
+        pageId: page.id,
+        pageName: page.name,
+        pageType: page.type,
+        journalId: journal.id,
+        changedSystemFields: changed,
+        unchangedSystemFields: Object.keys(after).filter(k => !(k in changed)),
+        ...(page.type === SIMPLE_QUEST_QUEST_TYPE
+          ? { objectives: await this.parseQuestObjectives(page) }
+          : {}),
+        ...(orphanWarning ? { orphanWarning } : {}),
+      };
+    } catch (error) {
+      this.auditLog(
+        'updateSimpleQuestPage',
+        request,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      return {
+        success: false,
+        message: `Failed to update Simple Quest page: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  /**
    * Resolve the page types this world will accept, and say where each came from.
    *
    * `Document.TYPES` reads `game.model`, which is built from the system and active modules.
@@ -4801,10 +5031,28 @@ export class FoundryDataAccess {
    * dnd5e feature identifiers, and it gets rule 3 wrong.
    */
   private async parseQuestObjectives(page: any): Promise<ObjectiveManifest> {
-    const objectiveState: Record<string, number> = page.system?.objectiveState ?? {};
-    const objectiveSecrets: Record<string, boolean> = page.system?.objectiveSecrets ?? {};
-    const html = typeof page.text?.content === 'string' ? page.text.content : '';
+    return this.parseObjectivesFromHtml(
+      typeof page.text?.content === 'string' ? page.text.content : '',
+      page.system?.objectiveState ?? {},
+      page.system?.objectiveSecrets ?? {},
+      page
+    );
+  }
 
+  /**
+   * The parse itself, over arbitrary HTML rather than a stored page.
+   *
+   * Split out so a *proposed* body can be keyed before it is written. That is what lets an
+   * update refuse a rewrite that would orphan objective state, instead of discovering the
+   * loss afterwards — the keys are derived from the objective text, so editing the text
+   * silently rehomes every stored checkbox.
+   */
+  private async parseObjectivesFromHtml(
+    html: string,
+    objectiveState: Record<string, number>,
+    objectiveSecrets: Record<string, boolean>,
+    relativeTo: any
+  ): Promise<ObjectiveManifest> {
     const objectives: ObjectiveEntry[] = [];
 
     if (html) {
@@ -4819,7 +5067,7 @@ export class FoundryDataAccess {
       const enriched: string = await (
         foundry as any
       ).applications.ux.TextEditor.implementation.enrichHTML(html, {
-        relativeTo: page,
+        relativeTo,
         secrets: true,
       });
 
