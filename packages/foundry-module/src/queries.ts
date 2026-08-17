@@ -594,6 +594,8 @@ export class QueryHandlers {
         content: data.content,
         additionalPages: data.additionalPages,
         folderName: data.folderName,
+        type: data.type,
+        system: data.system,
       });
     } catch (error) {
       throw new Error(
@@ -683,6 +685,8 @@ export class QueryHandlers {
     content: string;
     pageId?: string;
     newPageName?: string;
+    type?: string;
+    system?: Record<string, unknown>;
   }): Promise<any> {
     try {
       // SECURITY: Silent GM validation
@@ -705,12 +709,16 @@ export class QueryHandlers {
         content: string;
         pageId?: string | undefined;
         newPageName?: string | undefined;
+        type?: string | undefined;
+        system?: Record<string, unknown> | undefined;
       } = {
         journalId: data.journalId,
         content: data.content,
       };
       if (data.pageId) updateRequest.pageId = data.pageId;
       if (data.newPageName) updateRequest.newPageName = data.newPageName;
+      if (data.type) updateRequest.type = data.type;
+      if (data.system) updateRequest.system = data.system;
 
       return await this.dataAccess.updateJournalContent(updateRequest);
     } catch (error) {

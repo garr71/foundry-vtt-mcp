@@ -4063,14 +4063,142 @@ export class FoundryDataAccess {
   // ===== PHASE 2 & 3: WRITE OPERATIONS =====
 
   /**
+   * Resolve the page types this world will accept, and say where each came from.
+   *
+   * `Document.TYPES` reads `game.model`, which is built from the system and active modules.
+   * The core four are unioned in explicitly rather than trusted to appear there, and the
+   * `dataModels` registry is unioned in because that is the key Simple Quest actually writes
+   * (`registerJournalSheet` does `Object.assign(CONFIG.JournalEntryPage.dataModels, ...)`).
+   * Three sources because a type missing from the list produces a refusal, and a refusal that
+   * is wrong is worse than no check.
+   */
+  private getJournalPageTypes(): string[] {
+    const types = new Set<string>(SRC_BACKED_PAGE_TYPES);
+    types.add('text');
+    try {
+      for (const t of (CONFIG as any).JournalEntryPage?.documentClass?.TYPES ?? []) types.add(t);
+    } catch {
+      // game.model may be unavailable; the other two sources still stand.
+    }
+    for (const t of Object.keys((CONFIG as any).JournalEntryPage?.dataModels ?? {})) types.add(t);
+    return Array.from(types).sort();
+  }
+
+  /**
+   * Validate a submitted `system` object against the page type's **live** DataModel.
+   *
+   * This exists because Foundry DataModels **silently discard unknown keys** on create and
+   * update: submitting `system.description` — exactly what Simple Quest's own stale
+   * `module.json` advertises under `htmlFields` — returns a clean success having written
+   * nothing. That is the failure this project keeps shipping, and a generic write tool is
+   * only safe with the check attached.
+   *
+   * Validating against `CONFIG.JournalEntryPage.dataModels` rather than a hand-mirrored Zod
+   * schema is deliberate: Simple Quest is a protected module on a release cadence we do not
+   * control, and a mirrored schema rots silently while the live one cannot.
+   *
+   * The rejection list is the documentation. A wrong guess costs one round trip and teaches
+   * the real field names, instead of costing tokens in every session's tool list.
+   */
+  private validateSystemData(
+    type: string,
+    system: Record<string, unknown> | undefined
+  ): { valid: boolean; accepted: string[]; rejected: string[]; message?: string } {
+    if (!system || Object.keys(system).length === 0) {
+      return { valid: true, accepted: [], rejected: [] };
+    }
+
+    const modelClass = (CONFIG as any).JournalEntryPage?.dataModels?.[type];
+    const schema = modelClass?.schema;
+
+    if (!schema) {
+      const rejected = Object.keys(system);
+      return {
+        valid: false,
+        accepted: [],
+        rejected,
+        message:
+          `Page type "${type}" has no registered data model, so it has no system fields; ` +
+          `${rejected.length} submitted key(s) would have been silently discarded: ` +
+          `${rejected.join(', ')}. Core page types (text, image, pdf, video) keep their body ` +
+          `in text.content or src, not in system.`,
+      };
+    }
+
+    const accepted: string[] = [];
+    const rejected: string[] = [];
+    const SchemaFieldClass = (foundry as any).data.fields.SchemaField;
+
+    const walk = (value: unknown, path: string[]): void => {
+      const dotted = path.join('.');
+      const field = schema.getField(dotted);
+
+      if (!field) {
+        rejected.push(dotted);
+        return;
+      }
+
+      // Descend only into SchemaField. ObjectField / ArrayField / SetField / AnyField take
+      // arbitrary contents by design — objectiveState's keys are objective slugs, and
+      // walking into them would reject every legitimate one.
+      const isPlainObj = value !== null && typeof value === 'object' && !Array.isArray(value);
+      if (field instanceof SchemaFieldClass && isPlainObj) {
+        for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+          walk(v, [...path, k]);
+        }
+        return;
+      }
+
+      accepted.push(dotted);
+    };
+
+    for (const [key, value] of Object.entries(system)) walk(value, [key]);
+
+    if (rejected.length === 0) return { valid: true, accepted, rejected };
+
+    const known = Object.keys(schema.fields ?? {})
+      .sort()
+      .join(', ');
+    return {
+      valid: false,
+      accepted,
+      rejected,
+      message:
+        `${rejected.length} key(s) are not in the live schema for "${type}" and would have ` +
+        `been silently discarded: ${rejected.join(', ')}. Nothing was written. ` +
+        `Top-level fields for this type: ${known}.`,
+    };
+  }
+
+  /**
    * Create journal entry for quests, with optional additional pages
+   *
+   * `type`/`system` default to a plain text page, so existing callers are unaffected.
+   * Every page is validated before any page is written — a partly-created journal is worse
+   * than none, and validation failures return rather than throw so the message survives
+   * ErrorHandler.handleToolError.
    */
   async createJournalEntry(request: {
     name: string;
     content: string;
     folderName?: string;
-    additionalPages?: Array<{ name: string; content: string }>;
-  }): Promise<{ id: string; name: string; pageCount: number }> {
+    type?: string | undefined;
+    system?: Record<string, unknown> | undefined;
+    additionalPages?: Array<{
+      name: string;
+      content: string;
+      type?: string | undefined;
+      system?: Record<string, unknown> | undefined;
+    }>;
+  }): Promise<{
+    id?: string | undefined;
+    name?: string | undefined;
+    pageCount?: number | undefined;
+    success?: boolean | undefined;
+    rejected?: string[] | undefined;
+    accepted?: string[] | undefined;
+    message?: string | undefined;
+  }> {
     this.validateFoundryState();
 
     // Use permission system for journal creation
@@ -4083,28 +4211,51 @@ export class FoundryDataAccess {
     }
 
     try {
-      // Build pages array: main page + any additional pages
-      const pages: Array<{ type: string; name: string; text: { content: string } }> = [
+      const requested = [
         {
-          type: 'text',
           name: 'Quest Details',
-          text: {
-            content: request.content,
-          },
+          content: request.content,
+          type: request.type ?? 'text',
+          system: request.system,
         },
+        ...(request.additionalPages ?? []).map(page => ({
+          name: page.name,
+          content: page.content,
+          type: page.type ?? 'text',
+          system: page.system,
+        })),
       ];
 
-      if (request.additionalPages) {
-        for (const page of request.additionalPages) {
-          pages.push({
-            type: 'text',
-            name: page.name,
-            text: {
-              content: page.content,
-            },
-          });
+      // Validate every page before writing any of them.
+      const knownTypes = this.getJournalPageTypes();
+      for (const page of requested) {
+        if (!knownTypes.includes(page.type)) {
+          return {
+            success: false,
+            rejected: [`type:${page.type}`],
+            accepted: [],
+            message:
+              `Unknown page type "${page.type}" for page "${page.name}". Nothing was written. ` +
+              `Available types: ${knownTypes.join(', ')}.`,
+          };
+        }
+        const check = this.validateSystemData(page.type, page.system);
+        if (!check.valid) {
+          return {
+            success: false,
+            rejected: check.rejected,
+            accepted: check.accepted,
+            message: `Page "${page.name}": ${check.message}`,
+          };
         }
       }
+
+      const pages = requested.map(page => ({
+        type: page.type,
+        name: page.name,
+        text: { content: page.content },
+        ...(page.system ? { system: page.system } : {}),
+      }));
 
       // Create journal entry with proper Foundry v13 structure
       const journalData = {
@@ -4121,6 +4272,7 @@ export class FoundryDataAccess {
       }
 
       const result = {
+        success: true,
         id: journal.id,
         name: journal.name || request.name,
         pageCount: pages.length,
@@ -4412,7 +4564,17 @@ export class FoundryDataAccess {
     content: string;
     pageId?: string | undefined;
     newPageName?: string | undefined;
-  }): Promise<{ success: boolean; pageId?: string | undefined; pageName?: string | undefined }> {
+    type?: string | undefined;
+    system?: Record<string, unknown> | undefined;
+  }): Promise<{
+    success: boolean;
+    pageId?: string | undefined;
+    pageName?: string | undefined;
+    pageType?: string | undefined;
+    rejected?: string[] | undefined;
+    accepted?: string[] | undefined;
+    message?: string | undefined;
+  }> {
     this.validateFoundryState();
 
     // Use permission system for journal updates - treating as createActor permission level
@@ -4432,18 +4594,51 @@ export class FoundryDataAccess {
 
       // Mode 1: Create a new page
       if (request.newPageName) {
+        // Defaults to 'text', so callers that never heard of typed pages are unaffected.
+        const pageType = request.type ?? 'text';
+
+        const knownTypes = this.getJournalPageTypes();
+        if (!knownTypes.includes(pageType)) {
+          return {
+            success: false,
+            rejected: [`type:${pageType}`],
+            accepted: [],
+            message:
+              `Unknown page type "${pageType}". Nothing was written. ` +
+              `Available types: ${knownTypes.join(', ')}.`,
+          };
+        }
+
+        const check = this.validateSystemData(pageType, request.system);
+        if (!check.valid) {
+          return {
+            success: false,
+            rejected: check.rejected,
+            accepted: check.accepted,
+            message: check.message,
+          };
+        }
+
         const created = await journal.createEmbeddedDocuments('JournalEntryPage', [
           {
-            type: 'text',
+            type: pageType,
             name: request.newPageName,
             text: {
               content: request.content,
             },
+            ...(request.system ? { system: request.system } : {}),
           },
         ]);
         const newPage = created?.[0];
         this.auditLog('updateJournalContent', request, 'success');
-        return { success: true, pageId: newPage?.id || '', pageName: request.newPageName };
+        return {
+          success: true,
+          pageId: newPage?.id || '',
+          pageName: request.newPageName,
+          // Read back from the created document rather than echoing the request: if Foundry
+          // rejected or coerced the type, the echo would report a page we did not create.
+          pageType: newPage?.type,
+        };
       }
 
       // Mode 2: Update a specific page by ID

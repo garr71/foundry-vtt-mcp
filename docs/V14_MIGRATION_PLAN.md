@@ -1848,15 +1848,59 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       `String#slugify`, none of which exist server-side. It must run against the **enriched** DOM —
       an `@QUEST[…]{Label}` inside an `<li>` changes `textContent` and therefore the slug.
       See **0a as built** below for four corrections the installed source forced.
-- [ ] **0b · Writer.** `createJournalEntry` / `updateJournalContent` accept `type` and `system`
-      instead of hardcoding `type: 'text'` (`data-access.ts` L4054, L4238). Unknown-key validation
-      lands here, so both write tools inherit it. **Also carries `getJournalContent`** — see 0a's
-      scope note.
+- [x] **0b · Writer.** ✅ **DONE, gate passed 7/7 2026-08-16.** `createJournalEntry` /
+      `updateJournalContent` accept `type` and `system` instead of hardcoding `type: 'text'`.
+      Unknown-key validation against the **live** DataModel lands here, so both write tools
+      inherit it. Tool surface: `pageType` + `pageSystem` on `update-quest-journal` only.
+      ⚠️ **`getJournalContent` moved out to 0d** — see below.
 - [ ] **0c · Search.** `handleSearchJournals` skips every non-text page
       (`quest-creation.ts` L764: `if (page.type !== 'text') continue;`). Every SQ page we create
       would be unsearchable. Fix the skip. Note in passing: it also does one WebSocket round trip
       per page, which will be slow in a module world — **measure before optimising**, do not bundle
       a rewrite into this cycle.
+- [ ] **0d · Journal-level reader/writer alignment** (split out of 0b, 2026-08-16).
+      `getJournalContent` picks `pages.find(p => p.type === 'text')` and has the same defect 0a
+      fixed, so an all-Simple-Quest journal reads as empty at the journal level.
+      **Why it is not in 0b:** its consumer round-trips. `update-quest-journal`'s
+      append-without-`pageId` path reads through `getJournalContent` and writes through
+      `updateJournalContent`'s own first-`text`-page lookup. Fixing the read alone makes append
+      **read page A and write page B**. Worse, the Phase 5 guard's comment records that it is only
+      reachable _with_ an explicit `pageId` "because without one, `updateJournalContent` targets
+      the first page of type `text`, which an SQ quest page never is" — so widening the reader
+      silently puts a wholesale `text.content` write back on a quest page and disarms the guard.
+      Fixing neither keeps read and write consistent, which is the property that matters.
+      **The fix is to stop matching two lookups and resolve once:** have the read return the page
+      id it resolved, and have the append path pass that id explicitly to the write, so the two
+      are the same page by construction rather than by coincidence — which also makes the Phase 5
+      type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
+      first page is **not** a text page.
+
+##### 0b gate result — 7/7, 2026-08-16
+
+Driven through the control port. Every write landed in a throwaway journal the gate created
+(`o6N1YGmXwvwPBpTY`, "MCP Gate 7a.0b (safe to delete)", folder "MCP Gate Scratch") — no module
+journal and no Simple Quest content was touched, per the scope boundary.
+
+| #   | Check                                                   | Result                                           |
+| --- | ------------------------------------------------------- | ------------------------------------------------ |
+| 1   | `pageType: simple-quest.lore` honoured                  | read-back `type=simple-quest.lore`               |
+| 1b  | Valid `system` field lands and round-trips              | `system.tags = ["gate-0b"]`, an array            |
+| 2   | `system.description` **refused by name**                | `rejected=["description"]` + the real field list |
+| 2b  | The refusal wrote nothing                               | page count 2 → 2                                 |
+| 3   | Mixed keys are all-or-nothing                           | `rejected=["bogusKey"] accepted=["tags"]`, 2 → 2 |
+| 4   | Unknown `pageType` refused with the real type list      | nothing written                                  |
+| 5   | **Branch not taken:** no `pageType` still yields `text` | `type=text`                                      |
+
+**Checks 2b/3/4 assert page count either side**, so "refused" has to mean nothing was written
+rather than merely looking unhappy — a rejection that still writes is the exact failure this
+validation exists to prevent, and a response-only check could not see it.
+
+Check 2's message is the deliverable working as designed: it names `description` **and** lists the
+type's real top-level fields, which is why the rejection is _returned_ rather than thrown.
+`ErrorHandler.handleToolError` would have replaced all of it with a generic template.
+
+Check 4 also confirms the three-source type union resolves: the refusal listed the core types
+**and** all eleven `simple-quest.*` subtypes, so `dataModels` was read, not just `game.model`.
 
 ##### 0a gate result — 8/8, 2026-08-16
 

@@ -182,6 +182,16 @@ export class QuestCreationTools {
               description:
                 'If provided (without pageId), creates a new page with this name instead of updating an existing one.',
             },
+            pageType: {
+              type: 'string',
+              description:
+                'Page type for a new page (only with newPageName). Defaults to "text". Module-defined subtypes are allowed, e.g. "simple-quest.lore". An unknown type is refused with the list of available types.',
+            },
+            pageSystem: {
+              type: 'object',
+              description:
+                'Type-specific system fields for a new page (only with newPageName), e.g. {"questGiver":"Aldern"}. Validated against the live data model: unknown keys are refused BY NAME and nothing is written, because Foundry would otherwise discard them silently and report success. Page body text goes in newContent, not here.',
+            },
             replaceContent: {
               type: 'boolean',
               description:
@@ -366,6 +376,8 @@ export class QuestCreationTools {
         updateType: z.enum(['progress', 'completion', 'failure', 'modification']),
         pageId: z.string().optional(),
         newPageName: z.string().optional(),
+        pageType: z.string().optional(),
+        pageSystem: z.record(z.unknown()).optional(),
         replaceContent: z.boolean().default(false),
       });
 
@@ -376,14 +388,46 @@ export class QuestCreationTools {
 
       // If creating a new page, skip the read-modify-write cycle
       if (request.newPageName) {
-        const formattedContent = this.formatNewPageContent(request.newContent, request.updateType);
+        // A typed page carries its own structure; the quest-update HTML wrapper is for plain
+        // text pages, so leave the caller's content alone when they asked for a subtype.
+        const formattedContent =
+          request.pageType && request.pageType !== 'text'
+            ? request.newContent
+            : this.formatNewPageContent(request.newContent, request.updateType);
+
         const result = await this.foundryClient.query('foundry-mcp-bridge.updateJournalContent', {
           journalId: request.journalId,
           content: formattedContent,
           newPageName: request.newPageName,
+          type: request.pageType,
+          system: request.pageSystem,
         });
 
-        if (!result || result.error || !result.success) {
+        if (!result) {
+          throw new Error('Failed to create new journal page');
+        }
+
+        // A schema rejection is a policy outcome, not an exception. Returned rather than
+        // thrown because ErrorHandler.handleToolError replaces the message with a generic
+        // template — and here the message IS the deliverable: it names the bad keys and
+        // lists the real ones. Throwing it would erase exactly the part worth reading.
+        if (!result.success && result.rejected) {
+          this.logger.info('Rejected typed page creation: keys not in live schema', {
+            journalId: request.journalId,
+            pageType: request.pageType,
+            rejected: result.rejected,
+          });
+          return {
+            success: false,
+            refused: true,
+            reason: 'unknown-system-keys',
+            rejected: result.rejected,
+            accepted: result.accepted,
+            message: result.message,
+          };
+        }
+
+        if (result.error || !result.success) {
           throw new Error(result?.error || 'Failed to create new journal page');
         }
 
@@ -393,6 +437,7 @@ export class QuestCreationTools {
           message: `New page "${request.newPageName}" created in journal`,
           pageId: result.pageId,
           pageName: result.pageName,
+          pageType: result.pageType,
           verified: true,
         };
       }
