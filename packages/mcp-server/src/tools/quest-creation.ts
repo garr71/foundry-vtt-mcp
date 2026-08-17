@@ -352,12 +352,46 @@ export class QuestCreationTools {
         request.relationship
       );
 
-      // Update journal with NPC link
+      // Write back to the SAME page the read resolved, by id. Without this the write did its
+      // own first-text-page search, so read and write agreed only by coincidence — and once
+      // the reader gained a non-text fallback they could diverge outright.
+      const target = journalResult.currentPage;
+      if (!target?.id) {
+        return {
+          success: false,
+          refused: true,
+          reason: 'no-body-page',
+          message:
+            `Journal "${request.journalId}" has no page with a text body to link an NPC into. ` +
+            `Nothing was modified.`,
+        };
+      }
+
+      // Text pages only. Before the fallback existed this path could only ever land on a text
+      // page, so restricting it keeps behaviour identical while stopping the new fallback from
+      // pushing quest-journal HTML into a module-defined page that keeps structured state.
+      if (target.type !== 'text') {
+        return {
+          success: false,
+          refused: true,
+          reason: 'unsupported-page-type',
+          pageId: target.id,
+          pageName: target.name,
+          pageType: target.type,
+          message:
+            `Refused: the only body page in this journal is "${target.name}" of type ` +
+            `"${target.type}", not "text". This tool writes quest-journal HTML and would ` +
+            `ignore the structured state that page keeps alongside its body. Nothing was ` +
+            `modified.`,
+        };
+      }
+
       const updateResult = await this.foundryClient.query(
         'foundry-mcp-bridge.updateJournalContent',
         {
           journalId: request.journalId,
           content: updatedContent,
+          pageId: target.id,
         }
       );
 
@@ -524,6 +558,9 @@ export class QuestCreationTools {
 
       // Append mode (default): read current content, format the update, append
       let currentContent: string;
+      // The page the write will target. Set from the caller's pageId, or from whatever the
+      // journal-level read resolved — never left for the writer to re-derive.
+      let resolvedPageId: string | undefined = request.pageId;
       if (request.pageId) {
         const pageResult = await this.foundryClient.query(
           'foundry-mcp-bridge.getJournalPageContent',
@@ -583,6 +620,42 @@ export class QuestCreationTools {
             `Journal not found: ${currentJournal?.error || 'Journal ID may be invalid'}`
           );
         }
+
+        // Pin the write to the page the read resolved. Previously this path let
+        // updateJournalContent run its own first-text-page search — two lookups agreeing by
+        // convention, which the reader's new fallback would have broken by resolving a
+        // Simple Quest page here while the writer still went looking for a text page.
+        const target = currentJournal.currentPage;
+        if (target?.id && target.type !== 'text') {
+          // Same refusal as the explicit-pageId branch, now reachable. Phase 5's guard
+          // comment relied on this path never landing on a non-text page; that assumption
+          // stops holding the moment the reader can fall back, so it is enforced instead.
+          this.logger.info('Append not possible: resolved body page is not a text page', {
+            journalId: request.journalId,
+            pageId: target.id,
+            pageType: target.type,
+          });
+
+          return {
+            success: false,
+            refused: true,
+            reason: 'unreadable-page-type',
+            pageId: target.id,
+            pageName: target.name ?? null,
+            pageType: target.type,
+            message:
+              `Cannot append: the only body page in this journal is "${target.name}" of type ` +
+              `"${target.type}", not "text". This tool writes quest-update HTML shaped for ` +
+              `plain text pages and would ignore the structured state a module subtype keeps ` +
+              `alongside its body. Nothing was modified.` +
+              (this.isSimpleQuestQuestPage(target.type)
+                ? ' Use set-quest-progress to add objectives, or update-simple-quest-page for' +
+                  ' prose — both preserve objective state.'
+                : ''),
+          };
+        }
+
+        resolvedPageId = target?.id;
         currentContent = currentJournal.content;
       }
 
@@ -604,11 +677,14 @@ export class QuestCreationTools {
         );
       }
 
-      // Update the journal
+      // Update the journal. `resolvedPageId`, not `request.pageId`: when the caller gave no
+      // page this is the id the read resolved, so the write cannot land somewhere else. It is
+      // still undefined only when the journal has no body page at all, which is the one case
+      // where updateJournalContent's create-a-page fallback is what we want.
       const result = await this.foundryClient.query('foundry-mcp-bridge.updateJournalContent', {
         journalId: request.journalId,
         content: updatedContent,
-        pageId: request.pageId,
+        pageId: resolvedPageId,
       });
 
       if (!result) {
@@ -623,14 +699,15 @@ export class QuestCreationTools {
         throw new Error('Failed to update quest journal: Update operation returned failure');
       }
 
-      // Verify the update by reading the content back
+      // Verify by reading back the page we wrote — resolvedPageId, so verification cannot
+      // read a different page than the write touched and call that a pass.
       let verifyContent: string;
-      if (request.pageId) {
+      if (resolvedPageId ?? result.pageId) {
         const verifyResult = await this.foundryClient.query(
           'foundry-mcp-bridge.getJournalPageContent',
           {
             journalId: request.journalId,
-            pageId: request.pageId,
+            pageId: resolvedPageId ?? result.pageId,
           }
         );
         verifyContent = verifyResult?.content || '';
@@ -730,6 +807,10 @@ export class QuestCreationTools {
           journalId: request.journalId,
           content: journalContent.content,
           currentPage: journalContent.currentPage,
+          // Surfaced deliberately: this flag exists so a caller can tell a text page from a
+          // fallback to a module subtype. Omitting it from this whitelist made the reader
+          // report the distinction and no caller able to see it.
+          currentPageIsFallback: journalContent.currentPageIsFallback,
           allPages: journalContent.allPages,
           pageCount: journalContent.pageCount,
           note: journalContent.note,

@@ -5467,11 +5467,23 @@ export class FoundryDataAccess {
   }
 
   /**
-   * Get journal entry content (first text page + page manifest)
+   * Get journal entry content (a body page + page manifest)
+   *
+   * Resolution is **text page first, then any page carrying a `text.content` body**. The
+   * fallback is what makes an all-Simple-Quest journal readable at the journal level; before
+   * it, such a journal returned `content: ''` with no `currentPage`.
+   *
+   * ⚠️ **`currentPage.id` is the contract, not a courtesy.** Callers that read here and then
+   * write must pass this id back explicitly. Two lookups that happen to agree is not the same
+   * as one resolution: `updateJournalContent`'s own no-`pageId` path searches for a *text*
+   * page, so once this reader gained a fallback the two could resolve to different pages and
+   * an append would read page A and write page B. `currentPageIsFallback` says which rule
+   * fired, so a caller can decline the fallback rather than discover it.
    */
   async getJournalContent(journalId: string): Promise<{
     content: string;
-    currentPage?: { id: string; name: string } | undefined;
+    currentPage?: { id: string; name: string; type: string } | undefined;
+    currentPageIsFallback?: boolean | undefined;
     allPages: Array<{ id: string; name: string; type: string }>;
     pageCount: number;
     note?: string | undefined;
@@ -5491,15 +5503,31 @@ export class FoundryDataAccess {
       })) || [];
     const pageCount = allPages.length;
 
-    // Get first text page content
-    const firstPage = journal.pages.find((page: any) => page.type === 'text');
-    if (!firstPage) {
+    const textPage = journal.pages.find((page: any) => page.type === 'text');
+    // Any module subtype keeps its body in the core text.content, so a journal of nothing but
+    // simple-quest pages does have a readable body — it just never had a 'text' page.
+    const fallbackPage = textPage
+      ? null
+      : journal.pages.find(
+          (page: any) =>
+            !SRC_BACKED_PAGE_TYPES.has(page.type) &&
+            typeof page.text?.content === 'string' &&
+            page.text.content.length > 0
+        );
+
+    const bodyPage = textPage ?? fallbackPage;
+    if (!bodyPage) {
       return { content: '', allPages, pageCount };
     }
 
     return {
-      content: firstPage.text?.content || '',
-      currentPage: { id: firstPage.id || '', name: firstPage.name || '' },
+      content: bodyPage.text?.content || '',
+      currentPage: {
+        id: bodyPage.id || '',
+        name: bodyPage.name || '',
+        type: bodyPage.type || 'text',
+      },
+      currentPageIsFallback: !textPage,
       allPages,
       pageCount,
       note:

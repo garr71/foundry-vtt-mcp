@@ -1859,7 +1859,8 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       would be unsearchable. Fix the skip. Note in passing: it also does one WebSocket round trip
       per page, which will be slow in a module world — **measure before optimising**, do not bundle
       a rewrite into this cycle.
-- [ ] **0d · Journal-level reader/writer alignment** (split out of 0b, 2026-08-16).
+- [x] **0d · Journal-level reader/writer alignment** ✅ **DONE, gate passed 6/6 2026-08-17**
+      (split out of 0b, 2026-08-16).
       `getJournalContent` picks `pages.find(p => p.type === 'text')` and has the same defect 0a
       fixed, so an all-Simple-Quest journal reads as empty at the journal level.
       **Why it is not in 0b:** its consumer round-trips. `update-quest-journal`'s
@@ -1875,6 +1876,44 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       are the same page by construction rather than by coincidence — which also makes the Phase 5
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
+
+##### 0d gate result — 6/6, 2026-08-17 (journal-level reader/writer alignment) — **Phase 7a complete**
+
+| #   | Check                                                                | Result                       |
+| --- | -------------------------------------------------------------------- | ---------------------------- |
+| 1   | Journal-level read finds a body page where it returned `""`          | 58 chars, `Gate Quest`       |
+| 2   | It says **which rule** fired                                         | `currentPageIsFallback=true` |
+| 3   | Append with no `pageId` refuses on a module page, **writes nothing** | 0 pages changed              |
+| 4   | `link-quest-to-npc` refuses the same way, **writes nothing**         | 0 pages changed              |
+| 5   | With a text page present, text wins                                  | `fallback=false`             |
+| 6   | The write lands on the resolved page and **no other**                | exactly 1 page changed       |
+
+**Checks 3 and 6 are the pair that matters.** Both snapshot every page body in the journal and
+compare afterwards, because the defect this cycle exists to prevent — read page A, write page B —
+shows up as a body changing somewhere nobody named. A response-only assertion could not see it.
+
+**What was actually fixed.** `getJournalContent` now resolves text-page-first then falls back to any
+page carrying a `text.content` body. That alone would have been dangerous:
+`updateJournalContent`'s own no-`pageId` path searches for a _text_ page, so the two lookups could
+resolve differently, and Phase 5's guard comment explicitly relied on that path never reaching a
+quest page. So the reader also returns `currentPage.id` and `currentPageIsFallback`, and **both
+round-tripping write paths pass that id back explicitly** — `update-quest-journal`'s append and
+`link-quest-to-npc`. Read and write are now the same page by construction rather than by two
+lookups agreeing. Both refuse a non-`text` resolved page, which keeps write behaviour identical to
+before while making Phase 5's guard cover the case it previously could not reach. Verification reads
+back the same resolved id, so a verify cannot pass by reading a page the write never touched.
+
+###### Two gate defects found and fixed in the running
+
+- **A whitelist swallowed the new field.** Checks 2 and 5 first failed with
+  `currentPageIsFallback=undefined`: the module set it, but `list-journals`' journal mode returns an
+  explicit list of fields and the new one was not on it. The alignment worked regardless (3/4/6
+  passed, since the write paths read the module response directly) — but the flag exists _for_
+  callers, and no caller could see it. **Adding a field to a reader is not done until every
+  passthrough that whitelists fields has been updated.**
+- **The fixture had to be fresh per run.** Check 5 adds a text page, which makes checks 1-4
+  unfalsifiable on any re-run against the same journal. Now a new journal per run. Cheaper to
+  create one journal than to score a check that cannot fail.
 
 ##### 7a.5 gate result — passed, 2026-08-17 (`set-journal-visibility`, 55 → 56 tools)
 
