@@ -1853,7 +1853,8 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       Unknown-key validation against the **live** DataModel lands here, so both write tools
       inherit it. Tool surface: `pageType` + `pageSystem` on `update-quest-journal` only.
       ⚠️ **`getJournalContent` moved out to 0d** — see below.
-- [ ] **0c · Search.** `handleSearchJournals` skips every non-text page
+- [x] **0c · Search.** ✅ **DONE, gate passed 5/5 2026-08-16.** `handleSearchJournals` skipped
+      every non-text page
       (`quest-creation.ts` L764: `if (page.type !== 'text') continue;`). Every SQ page we create
       would be unsearchable. Fix the skip. Note in passing: it also does one WebSocket round trip
       per page, which will be slow in a module world — **measure before optimising**, do not bundle
@@ -1874,6 +1875,59 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       are the same page by construction rather than by coincidence — which also makes the Phase 5
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
+
+##### 0c gate result — 5/5, 2026-08-16
+
+Read-only gate; nothing was written. Baseline captured **before** deploying, which is the half
+that cannot be recovered afterwards.
+
+| #   | Check                                                                      | Baseline | After             |
+| --- | -------------------------------------------------------------------------- | -------- | ----------------- |
+| 1   | `"destroyed two villages"` → `UAAOvl8akbVb2r8r` (achievement)              | 0 hits   | 1 hit, right page |
+| 2   | `"Peace between Wyverns"` → `Hg8hmaZiNbLI0Rqg` (event)                     | 0 hits   | 1 hit, right page |
+| 3   | `"helped an old lady"` → `gmufLlJeZCsM8OZ6` (achievement)                  | 0 hits   | 1 hit, right page |
+| 4   | **Control:** `"pzopss0018-vampire"`, a token in an image page's `src` only | 0 hits   | 0 hits            |
+| 5   | **Regression:** `"watchmage"` on text pages                                | 6 hits   | 6 hits            |
+
+**The 0-hit baseline is what makes check 1-3 evidence rather than coincidence.** Had any string
+also lived in a text page, the baseline would have been ≥1 and the "1 hit now" would prove nothing.
+Check 4 is the over-inclusion control: it required hunting for a token that is in an image `src` and
+in no prose — the obvious candidate, `"watchmage"`, appears in six AP text pages and would have
+passed no matter what the code did.
+
+**Cost, measured rather than assumed** (the plan said measure before optimising): 419 candidate
+pages before, 434 after — the fix adds 15 round trips, not 257, because src-backed pages are still
+skipped. Full content search ~140 ms before and after. **No optimisation warranted; do not rewrite
+the per-page round-trip loop.**
+
+###### ⚠️ A wrong diagnosis, caught before it shipped
+
+The first run of this gate failed 4/5 with every search returning 0 hits in ~0 ms. That was
+mis-read as "`search-journals` returns a confident `success: true, totalMatches: 0` while Foundry
+is unreachable" — the house failure mode, apparently in its highest-stakes location yet.
+
+**It was not.** Verified afterwards against a real disconnect (Foundry tab closed, poll until
+`list-journals` fails, then capture the raw payload): `search-journals` **errors** during an
+outage. `handleSearchJournals` guards `listJournals` at the top and throws before reading any
+page. The gate harness only printed hit counts, in which a thrown error and an empty result set
+are indistinguishable — so the mechanism was inferred from a display artefact, not observed.
+
+Two things carried forward:
+
+- **A harness that renders failure as emptiness cannot diagnose emptiness.** The fix is to print
+  the raw payload when a check fails, not just the derived count. This is the same lesson as
+  "when a response IS the evidence, copy it, don't let a model retype it," now applied to the
+  harness rather than the model.
+- **Restarting the backend does not reliably disconnect the module.** It reconnected on its own
+  within 4 s on a later attempt, so an outage cannot be reproduced that way; closing the Foundry
+  tab is the deterministic fixture.
+
+The counting added in response is still worth keeping, but for a **narrower** reason than it was
+written for: `pagesRead` is now reported (confirmed at 434), and a page read that fails after
+`listJournals` succeeded — a mid-search disconnect, or a per-page error — is counted and reported
+as `partial` instead of silently skipped. **The `pagesFailed` branches are unexercised**, and the
+total-outage case they were motivated by is already covered by the existing guard. Noted here
+rather than left for someone to discover.
 
 ##### 0b gate result — 7/7, 2026-08-16
 

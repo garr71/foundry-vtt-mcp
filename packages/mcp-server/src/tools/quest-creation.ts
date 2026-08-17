@@ -8,6 +8,18 @@ export interface QuestCreationToolsOptions {
   logger: Logger;
 }
 
+/**
+ * Foundry's src-backed core page types — the ones whose body is a file path rather than
+ * prose (`common/documents/journal-entry-page.mjs` L32 lists all four core types; `text` is
+ * the fourth). Module-defined subtypes are never in this set: they keep their body in the
+ * core `text.content`, which is why searching only `type === 'text'` missed all of them.
+ *
+ * Deliberately mirrored from `SRC_BACKED_PAGE_TYPES` in the foundry-module package rather
+ * than shared: the two packages have no common runtime, and three strings behind a comment
+ * is cheaper than a shared-package import for a value that has not changed since v10.
+ */
+const SRC_BACKED_PAGE_TYPES = new Set(['image', 'video', 'pdf']);
+
 // Quest creation types
 interface QuestJournalRequest {
   questTitle: string;
@@ -233,7 +245,7 @@ export class QuestCreationTools {
       {
         name: 'search-journals',
         description:
-          'Search through all pages of all journal entries for specific content or keywords. Returns which specific page matched, so you can read it with list-journals using journalId + pageId.',
+          'Search through all pages of all journal entries for specific content or keywords. Covers text pages and module-defined page subtypes (e.g. Simple Quest pages); image, video and PDF pages are excluded from content search because their body is a file path, not prose. Returns which specific page matched, so you can read it with list-journals using journalId + pageId.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -785,6 +797,9 @@ export class QuestCreationTools {
 
       const searchResults = [];
       const query = request.searchQuery.toLowerCase();
+      let pagesRead = 0;
+      let pagesFailed = 0;
+      let firstPageError: string | null = null;
 
       for (const journal of journals) {
         let matches = false;
@@ -808,7 +823,13 @@ export class QuestCreationTools {
         if (request.searchType === 'content' || request.searchType === 'both') {
           const pages = journal.pages || [];
           for (const page of pages) {
-            if (page.type !== 'text') continue;
+            // Was `page.type !== 'text'`, which made every module-defined subtype
+            // unsearchable — including every Simple Quest page this phase creates.
+            // Skip only the src-backed core types: their "content" is a file path, so
+            // matching it would return image assets for a prose query. Mirrors
+            // SRC_BACKED_PAGE_TYPES in data-access.ts, which resolves the same split.
+            if (SRC_BACKED_PAGE_TYPES.has(page.type)) continue;
+            pagesRead++;
             try {
               const pageContent = await this.foundryClient.query(
                 'foundry-mcp-bridge.getJournalPageContent',
@@ -830,7 +851,15 @@ export class QuestCreationTools {
                 });
               }
             } catch (error) {
-              // Skip pages with content errors
+              // Count the miss, do not just swallow it. Upstream skipped silently, so a
+              // dead Foundry connection produced "0 results" with every read having
+              // failed — indistinguishable from "nothing matched", which mid-session
+              // reads as "it is not in the journals". Found exactly that way while
+              // gating 0c.
+              pagesFailed++;
+              if (!firstPageError) {
+                firstPageError = error instanceof Error ? error.message : String(error);
+              }
             }
           }
         }
@@ -840,12 +869,48 @@ export class QuestCreationTools {
         }
       }
 
+      // Every page read failed: that is an outage, not an empty result set. Reported as a
+      // failure rather than as zero matches, because the two are indistinguishable to the
+      // caller and the wrong one gets read as "it is not in the journals". Returned, not
+      // thrown — handleToolError would discard the counts and the underlying message.
+      if (pagesRead > 0 && pagesFailed === pagesRead) {
+        this.logger.warn('Journal content search failed on every page', {
+          pagesRead,
+          firstPageError,
+        });
+        return {
+          success: false,
+          searchQuery: request.searchQuery,
+          searchType: request.searchType,
+          results: [],
+          totalMatches: 0,
+          pagesRead,
+          pagesFailed,
+          message:
+            `Search could not read any of the ${pagesRead} candidate pages, so this is NOT ` +
+            `a "no results" answer — nothing was actually searched. Foundry is most likely ` +
+            `disconnected; check the bridge and retry. First error: ${firstPageError}`,
+        };
+      }
+
       return {
         success: true,
         searchQuery: request.searchQuery,
         searchType: request.searchType,
         results: searchResults,
         totalMatches: searchResults.length,
+        pagesRead,
+        // Present only when it happened, so a clean search stays quiet, but a partial one
+        // can never be mistaken for a complete one.
+        ...(pagesFailed > 0
+          ? {
+              pagesFailed,
+              partial: true,
+              message:
+                `${pagesFailed} of ${pagesRead} pages could not be read and were not ` +
+                `searched; results may be incomplete. First error: ${firstPageError}`,
+            }
+          : {}),
       };
     } catch (error) {
       this.errorHandler.handleToolError(error, 'search-journals', 'journal search');
