@@ -2497,6 +2497,10 @@ folder are gate litter and can be deleted by name prefix. There is still **no jo
 and adding one was declined on purpose — a permanently-resident destructive tool to serve a testing
 convenience is a bad trade.
 
+**After 7b's tools ship, do 7z** — the GM-facing usage documentation, agreed 2026-08-17. It is the
+last deliverable of the phase and it closes three gaps that no per-tool description can: workflow
+sequencing, the journal-isolation rule, and the fact that enrichers exist at all.
+
 ---
 
 #### 7b — Timeline & enrichers 🕰️ ⬜ **designed 2026-08-17, not started**
@@ -2628,6 +2632,68 @@ link, a visible embarrassment — so until then the tools should treat `@time` a
   not sleep (7a.4).
 - Confirm a module is installed before scheduling work against it (7c). `@time` is why this phase
   ends where it does.
+
+#### 7z — GM-facing usage documentation 📖 ⬜ (agreed 2026-08-17, after 7b's tools ship)
+
+**Trigger:** once 7b's tools are built and gate-passed (56 → 59). Not before — tool descriptions and
+behaviour are still moving, and a document written against a moving target is a second source of
+truth that drifts.
+
+**Franklin's framing (2026-08-17):** the document lives in the **dev vault** as the single source of
+truth; he propagates it to the pf2e game vault or references it cross-vault so it never forks.
+Suggested home: `Z:\Obsidian Vaults\FoundryDevVault\01 - MCP Server\Simple Quest Tooling — GM Guide.md`.
+
+##### Why this is needed at all — MCP tools are self-describing, but only per tool
+
+A model consuming this server sees exactly three things per tool: `name`, `description`, and
+`inputSchema` with its per-parameter descriptions. Nothing else — not the code, not this plan, not
+`CLAUDE.md`. The 7a descriptions were written heavy on purpose so the non-obvious policy travels with
+the tool (prep defaults that contradict the module, merge-not-replace, exact-name matching,
+`hiddenByAncestor`), and refusals teach on contact by naming the real fields or listing the available
+objectives.
+
+So individual tool _use_ needs no documentation. **Three things fall outside what a per-tool
+description can carry**, and they are the whole reason this deliverable exists:
+
+1. **Workflow sequencing.** Each tool describes itself; nothing describes the lifecycle. That the
+   hand-off is deliberately **two calls** — `set-journal-visibility` for access, `set-quest-progress`
+   for status — and that skipping the second leaves an `UNDISCOVERED` badge on a quest the party can
+   already see. Franklin hit exactly this during the 7a.5 gate.
+2. **The journal-isolation rule.** Page ownership inside a _visible_ journal is not a security
+   boundary, so spoiler-sensitive prep belongs in its **own** journal via `folder`, never co-located
+   via `journalId`. The `folder` parameter says what it does, not why it is the safer choice — an
+   assistant optimising for tidiness would co-locate everything and quietly leak.
+3. **Enrichers exist and are unmentioned.** Emission needs no tool, which also means no tool mentions
+   them, so an assistant will never write `@QUEST[uuid]{Label}` because nothing tells it the syntax is
+   available. Same for `@time` being **forbidden output** while Simple Timekeeping is uninstalled.
+
+##### Structure: two parts, kept structurally separate
+
+- **Part A — paste-ready assistant instructions.** Short and self-contained (~15-25 lines), written to
+  be dropped into the GM AI's project instructions verbatim. Covers only the three gaps above. This is
+  the part that has to be short, because it is loaded every session.
+- **Part B — human reference for Franklin.** The tool inventory, the lifecycle table, the traps, and
+  the "why" behind the defaults. Length is free here; nothing loads it into a context window.
+
+⚠️ **An `.md` file in the vault is not read by the GM AI.** Part A only takes effect once it is pasted
+into (or referenced by) the assistant's project instructions. Worth stating in the document itself, so
+future-Franklin does not assume writing it was sufficient.
+
+##### What the document must NOT do
+
+**Do not restate per-tool parameters.** They are already in the `inputSchema`, the model already reads
+them, and a copy in the vault is a second source of truth that will drift — the exact failure this
+project keeps finding. Part B links to the tool list; it does not mirror it.
+
+**Maintenance rule: if the document and the tool descriptions disagree, the tool descriptions win.**
+They are what the model actually reads. The document is derived, not authoritative.
+
+##### Note on cross-vault referencing
+
+Obsidian `[[wikilinks]]` do not resolve across vaults. Cross-vault reference needs an
+`obsidian://open?vault=…&file=…` URI, or a filesystem junction/symlink so the same file appears in
+both vaults. Franklin's call which; recording it so the "single source of truth" intent is not defeated
+by a link that silently does not work.
 
 #### 7b-deferred — the rest of the Simple Quest surface
 
