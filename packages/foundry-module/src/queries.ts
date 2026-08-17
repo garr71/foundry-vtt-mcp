@@ -69,6 +69,8 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.updateSimpleQuestPage`] =
       this.handleUpdateSimpleQuestPage.bind(this);
     CONFIG.queries[`${modulePrefix}.setQuestProgress`] = this.handleSetQuestProgress.bind(this);
+    CONFIG.queries[`${modulePrefix}.setJournalVisibility`] =
+      this.handleSetJournalVisibility.bind(this);
     CONFIG.queries[`${modulePrefix}.updateJournalContent`] =
       this.handleUpdateJournalContent.bind(this);
 
@@ -767,6 +769,28 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to set quest progress: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle visibility changes (page/journal ownership + objective secrets)
+   */
+  async handleSetJournalVisibility(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      this.dataAccess.validateFoundryState();
+
+      if (!data?.journalId) throw new Error('journalId is required');
+
+      return await this.dataAccess.setJournalVisibility(data);
+    } catch (error) {
+      throw new Error(
+        `Failed to set visibility: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

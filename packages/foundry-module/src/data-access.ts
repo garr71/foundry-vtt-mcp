@@ -4894,6 +4894,322 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Set what players can see: page/journal access, and which objectives are secret.
+   *
+   * These are **two independent axes** and conflating them is the trap this tool exists to
+   * manage. Ownership decides whether the page exists for a player at all; objective secrets
+   * decide what is redacted inside a page they can already open. A secret objective on a page
+   * they cannot reach changes nothing, and a revealed objective on a hidden page is still
+   * invisible.
+   *
+   * **Ownership is written on both levels.** A player needs OBSERVER on the JournalEntry to
+   * see the page in the sidebar at all, so granting the page alone produces a page every
+   * field read confirms and no player can open — the failure mode that made the plan insist
+   * this gate be run from a real player login rather than by reading fields back.
+   *
+   * ⚠️ **Secrets cascade visually through DOM nesting but not in data.** A secret parent
+   * `<li>` hides its whole subtree via `.hidden` regardless of the children's own flags, so
+   * revealing a nested objective while its parent is still secret **changes the data and
+   * changes nothing on screen**. That case is *reported* as `hiddenByAncestor`, never fixed
+   * by auto-revealing the ancestor: doing so would spill the parent's other children, which
+   * were meant to stay back, and that spill is invisible until a player mentions it.
+   */
+  async setJournalVisibility(request: {
+    journalId: string;
+    pageId?: string | undefined;
+    visibleToPlayers?: boolean | undefined;
+    revealObjectives?: string | Array<string | number> | undefined;
+    hideObjectives?: string | Array<string | number> | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('createActor', { quantity: 1 });
+    if (!permissionCheck.allowed) {
+      return { success: false, message: `Visibility change denied: ${permissionCheck.reason}` };
+    }
+
+    const journal = game.journal.get(request.journalId);
+    if (!journal) return { success: false, message: `Journal not found: ${request.journalId}` };
+
+    let page: any = null;
+    if (request.pageId) {
+      page = journal.pages.get(request.pageId);
+      if (!page) return { success: false, message: `Page not found: ${request.pageId}` };
+      if (!String(page.type).startsWith('simple-quest.')) {
+        return {
+          success: false,
+          message:
+            `Page "${page.name}" is type "${page.type}", not a Simple Quest page. This tool is ` +
+            `scoped to Simple Quest pages; module-authored journals are read-only.`,
+        };
+      }
+    }
+
+    if (
+      request.visibleToPlayers === undefined &&
+      request.revealObjectives === undefined &&
+      request.hideObjectives === undefined
+    ) {
+      return {
+        success: false,
+        message: 'Nothing to do: provide visibleToPlayers, revealObjectives, or hideObjectives.',
+      };
+    }
+
+    if ((request.revealObjectives !== undefined || request.hideObjectives !== undefined) && !page) {
+      return {
+        success: false,
+        message: 'Revealing or hiding objectives needs a pageId — objectives live on a page.',
+      };
+    }
+
+    try {
+      const result: Record<string, unknown> = {
+        success: true,
+        journalId: journal.id,
+        journalName: journal.name,
+      };
+
+      // ---- ownership, both levels ----------------------------------------------------
+      if (request.visibleToPlayers !== undefined) {
+        const level = request.visibleToPlayers ? 2 : 0;
+
+        await journal.update({ 'ownership.default': level });
+        if (page) await page.update({ 'ownership.default': level });
+
+        result.ownership = {
+          journal: journal.ownership?.default,
+          page: page ? page.ownership?.default : undefined,
+          bothLevelsSet: !!page,
+        };
+
+        // Without a pageId only half the requirement is met, and that half reads as success.
+        // Say which pages are still unreachable rather than letting it be discovered later.
+        if (!page && request.visibleToPlayers) {
+          const stillHidden = journal.pages
+            .filter((p: any) => (p.ownership?.default ?? -1) === 0)
+            .map((p: any) => ({ id: p.id, name: p.name }));
+          if (stillHidden.length > 0) {
+            result.warning =
+              `The journal is now visible, but ${stillHidden.length} of its page(s) still have ` +
+              `ownership NONE and remain invisible to players. Pass pageId to set both levels.`;
+            result.pagesStillHidden = stillHidden;
+          }
+        }
+      }
+
+      // ---- objective secrets ---------------------------------------------------------
+      if (request.revealObjectives !== undefined || request.hideObjectives !== undefined) {
+        const manifest = await this.parseQuestObjectives(page);
+
+        if (manifest.objectives.length === 0) {
+          return {
+            success: false,
+            message: `Page "${page.name}" has no objectives to reveal or hide.`,
+          };
+        }
+
+        // Exact matches only, and an unmatched selector fails loudly rather than resolving to
+        // index 0. Getting this wrong reveals the wrong secret to the party.
+        const resolve = (
+          selector: string | Array<string | number>
+        ): { hits: ObjectiveEntry[] } | { error: string } => {
+          if (selector === 'all') return { hits: [...manifest.objectives] };
+          if (!Array.isArray(selector)) {
+            return {
+              error: `Selector must be "all" or an array, got ${JSON.stringify(selector)}.`,
+            };
+          }
+
+          const hits: ObjectiveEntry[] = [];
+          for (const one of selector) {
+            let found: ObjectiveEntry[];
+            if (typeof one === 'number') {
+              found = manifest.objectives.filter(o => o.index === one);
+            } else {
+              const needle = String(one).trim().toLowerCase();
+              found = manifest.objectives.filter(
+                o => o.key === one || o.text.trim().toLowerCase() === needle
+              );
+            }
+            if (found.length === 0) {
+              return {
+                error:
+                  `No objective matches ${JSON.stringify(one)} on "${page.name}". Nothing was ` +
+                  `written. Available: ${manifest.objectives
+                    .map(o => `[${o.index}] "${o.text}" (${o.key})`)
+                    .join(' | ')}`,
+              };
+            }
+            if (found.length > 1) {
+              return {
+                error:
+                  `${found.length} objectives match ${JSON.stringify(one)}. Address by key or ` +
+                  `index: ${found.map(o => `[${o.index}] ${o.key}`).join(', ')}`,
+              };
+            }
+            hits.push(found[0]!);
+          }
+          return { hits };
+        };
+
+        const toReveal =
+          request.revealObjectives !== undefined ? resolve(request.revealObjectives) : { hits: [] };
+        if ('error' in toReveal) {
+          return {
+            success: false,
+            refused: true,
+            reason: 'objective-not-found',
+            message: toReveal.error,
+          };
+        }
+        const toHide =
+          request.hideObjectives !== undefined ? resolve(request.hideObjectives) : { hits: [] };
+        if ('error' in toHide) {
+          return {
+            success: false,
+            refused: true,
+            reason: 'objective-not-found',
+            message: toHide.error,
+          };
+        }
+
+        const overlap = toReveal.hits.filter(r => toHide.hits.some(h => h.key === r.key));
+        if (overlap.length > 0) {
+          return {
+            success: false,
+            refused: true,
+            reason: 'contradictory-selectors',
+            message:
+              `Refused: ${overlap.map(o => o.key).join(', ')} appear in both revealObjectives ` +
+              `and hideObjectives. Nothing was written.`,
+          };
+        }
+
+        // Read-modify-write, setting `false` rather than deleting the key.
+        //
+        // ⚠️ Deleting does not work, and it fails silently. Foundry MERGES an object write
+        // into the stored value, so a key absent from the submitted map is simply not
+        // mentioned — the old `true` survives and the response happily reports a reveal that
+        // never happened. Simple Quest's own alt-click handler
+        // (`JournalPageHelpers.js` L449) mergeObjects `{[key]: !current}`, so `false` is
+        // exactly what the module itself stores, and any falsy value reads as visible.
+        // Removing a key would need Foundry's `-=` unset syntax; matching SQ is better.
+        const secrets: Record<string, boolean> = {
+          ...((page.system?.objectiveSecrets as Record<string, boolean>) ?? {}),
+        };
+
+        const revealed: string[] = [];
+        const alreadyVisible: string[] = [];
+        for (const objective of toReveal.hits) {
+          if (secrets[objective.key] === true) {
+            secrets[objective.key] = false;
+            revealed.push(objective.key);
+          } else {
+            alreadyVisible.push(objective.key);
+          }
+        }
+
+        const hidden: string[] = [];
+        const alreadySecret: string[] = [];
+        for (const objective of toHide.hits) {
+          if (secrets[objective.key] === true) alreadySecret.push(objective.key);
+          else {
+            secrets[objective.key] = true;
+            hidden.push(objective.key);
+          }
+        }
+
+        await page.update({ 'system.objectiveSecrets': secrets });
+
+        // Read the field back and confirm the write actually took. This exists because the
+        // first version of this method reported `revealed: [...]` for a write that Foundry's
+        // merge semantics had silently discarded — a false success, which is worse than a
+        // failure because nobody goes looking. A tool that changes what players can see must
+        // not take its own word for it.
+        const written = (page.system?.objectiveSecrets as Record<string, boolean>) ?? {};
+        const notApplied = [
+          ...revealed.filter(k => written[k] === true),
+          ...hidden.filter(k => written[k] !== true),
+        ];
+        if (notApplied.length > 0) {
+          return {
+            success: false,
+            reason: 'write-not-applied',
+            notApplied,
+            message:
+              `The objectiveSecrets write did not take for ${notApplied.join(', ')}. Nothing ` +
+              `can be trusted about visibility on this page until that is resolved — read it ` +
+              `back before telling players anything.`,
+            objectiveSecrets: written,
+          };
+        }
+
+        // Now that the new state is known, work out which reveals are inert because an
+        // ancestor is still secret. Computed after the write, against the resulting state,
+        // so it describes what a player will actually see rather than what was intended.
+        const byIndex = new Map(manifest.objectives.map(o => [o.index, o]));
+        const hiddenByAncestor: Array<{ key: string; ancestor: string; ancestorText: string }> = [];
+
+        for (const objective of [...toReveal.hits]) {
+          let parentIndex = objective.parentIndex;
+          while (parentIndex !== null && parentIndex !== undefined) {
+            const parent = byIndex.get(parentIndex);
+            if (!parent) break;
+            if (secrets[parent.key] === true) {
+              hiddenByAncestor.push({
+                key: objective.key,
+                ancestor: parent.key,
+                ancestorText: parent.text,
+              });
+              break;
+            }
+            parentIndex = parent.parentIndex;
+          }
+        }
+
+        result.revealed = revealed;
+        result.alreadyVisible = alreadyVisible;
+        result.hidden = hidden;
+        result.alreadySecret = alreadySecret;
+        if (hiddenByAncestor.length > 0) {
+          result.hiddenByAncestor = hiddenByAncestor;
+          result.hiddenByAncestorNote =
+            `${hiddenByAncestor.length} objective(s) were revealed in data but remain invisible ` +
+            `because an enclosing objective is still secret — a secret parent hides its whole ` +
+            `subtree. Reveal the ancestor too if the players should see these. The ancestor was ` +
+            `NOT revealed automatically, because that would also expose its other children.`;
+        }
+
+        result.objectives = await this.parseQuestObjectives(page);
+      }
+
+      if (page) {
+        result.pageId = page.id;
+        result.pageName = page.name;
+        result.pageOwnership = page.ownership?.default;
+      }
+      result.journalOwnership = journal.ownership?.default;
+
+      this.auditLog('setJournalVisibility', request, 'success');
+      return result;
+    } catch (error) {
+      this.auditLog(
+        'setJournalVisibility',
+        request,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      return {
+        success: false,
+        message: `Failed to set visibility: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  /**
    * Resolve the page types this world will accept, and say where each came from.
    *
    * `Document.TYPES` reads `game.model`, which is built from the system and active modules.

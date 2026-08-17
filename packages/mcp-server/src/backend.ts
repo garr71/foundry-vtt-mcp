@@ -1839,6 +1839,11 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'set-journal-visibility':
+                  result = await simpleQuestTools.handleSetJournalVisibility(args);
+
+                  break;
+
                 // Playlist tools
                 case 'list-playlists':
                   result = await playlistTools.handleListPlaylists(args);

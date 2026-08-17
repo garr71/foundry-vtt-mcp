@@ -1876,6 +1876,116 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
 
+##### 7a.5 gate result — passed, 2026-08-17 (`set-journal-visibility`, 55 → 56 tools)
+
+**Verified from a real player login**, as the plan required — a second Foundry session logged in as a
+player, watching live while the GM side drove the tool. Fixture: `Gate Nested Quest` in the shared
+`MCP Gate Fixture` journal, built with a **secret parent** ("Identify the leak") holding two secret
+children, plus a secret sibling. It had to be created nested rather than appended to, because 7a.4
+refuses nested appends for the re-keying reason.
+
+| Stage | Action                                          | Player screen                                        |
+| ----- | ----------------------------------------------- | ---------------------------------------------------- |
+| setup | page created hidden, all objectives secret      | nothing                                              |
+| 1     | grant access + reveal the sibling               | quest appears with **one** objective                 |
+| 2     | **reveal a child whose parent is still secret** | **no change** — and `hiddenByAncestor` reported      |
+| 3     | reveal the parent                               | parent + that child appear, **sibling stays hidden** |
+| 4     | five refusal checks                             | not player-visible                                   |
+
+**Stage 3 is what proves the cascade only suppresses and never grants.** Both children sit under the
+same now-visible parent, yet one appears and one does not. That is why stage 2 refuses to
+auto-reveal the ancestor: doing so would have pushed "Compare the seals" to the party unasked, and
+nothing on the GM's screen would have said so.
+
+The `hiddenByAncestor` ancestor key came back as
+`identify-the-leakread-the-writ-ledgercompare-the-s` — the parent's slug swallowing both children
+and cut mid-word at 50 characters. The 0a keying rule, visible in live data.
+
+###### ⚠️ The bug this gate caught: a **false success** on a silently-discarded write
+
+Stage 1 first reported `revealed: ["report-to-the-lictor"]` while the stored value stayed `true`.
+The reveal had removed the key from the secrets map and written the map back — but **Foundry merges
+an object write into the stored value**, so a key absent from the submitted map is simply not
+mentioned and the old `true` survives.
+
+Two things make this the worst instance of the house pattern so far:
+
+1. **It reported success.** A failure gets investigated; a false success does not. Had the gate
+   checked only the tool response — as an earlier harness would have — it would have passed, and the
+   defect would have surfaced at the table as "I revealed that, why can't they see it?"
+2. **The source had already said so.** `JournalPageHelpers.js` L449 shows Simple Quest's own toggle
+   doing `mergeObject(currentSecrets, {[key]: !current})` — it stores `false`, it does not delete.
+   That was read during design and then overridden anyway, on the theory that dropping the key kept
+   the map tidier. **Reading the source is not enough if you then override what it shows you.**
+
+Fixed by storing `false`, matching the module. And `set-journal-visibility` now **reads the field
+back after writing and refuses to claim success if the write did not take**
+(`reason: 'write-not-applied'`). A tool that changes what players can see must not take its own word
+for it.
+
+Neighbouring tools checked for the same failure mode: `set-quest-progress` and
+`create-simple-quest-page` only ever **set** keys, never remove them, and setting works correctly
+under merge — so they are safe by construction, not by luck.
+
+###### ⚠️ Check (e) passed while testing nothing
+
+The first stage-4 run scored `e. refuses a non-Simple-Quest page` as PASS on the message
+`Page not found: nope` — the fixture journal has no text page, so the harness had fallen back to a
+literal `'nope'` and the refusal was for a **missing** page, not a wrong-typed one. Re-run against a
+real text page (`License` in the Hellbreakers `Frontmatter` journal), asserting ownership unchanged
+on both levels.
+
+Also worth carrying: the redo uses `revealObjectives` rather than `visibleToPlayers`. **Never probe a
+guard with the payload you would regret if the guard is broken** — a failed reveal on a text page is
+inert, whereas a failed ownership write would have granted players access to a module-authored
+journal.
+
+###### Confirmed from the player side, incidentally
+
+- **`status: -1` hides nothing.** The page rendered for the player with an `UNDISCOVERED` badge the
+  whole time. Previously inferred from reading `JournalBrowser.js`; now observed.
+- **There is no Simple Quest setting to hide undiscovered quests from players.** All 43 registered
+  settings were checked; the word "Undiscovered" appears once in the module, as a status label, and
+  the recap grouping code does no status or permission filtering. `hideFolderFromPlayers` hides the
+  folder from Foundry's own sidebar, which is a different thing. **Ownership is the only lock**, and
+  the prep default of hidden + `-1` is what keeps prep quests invisible.
+
+###### ⚠️ Page ownership inside a visible journal is a display boundary, not a security boundary
+
+Franklin spotted a bare `MCP GATE FIXTURE` header under "In Progress" on the **player** screen, with
+no page beneath it. Traced to `JournalBrowser.js` ~L325-339:
+
+```js
+if (journal.pages?.some(p => p.system?.status === 0)) {
+  // no permission filter
+  questJournals.inProgress.push(entry);
+}
+```
+
+Grouping walks **every** page in the journal regardless of permission, while the page rows under each
+group are filtered by `isObserver` (L367). Hence a header with nothing under it.
+
+**The consequence is bigger than the cosmetic glitch.** That check ran on the player's client and
+returned true, which proves the player's browser holds the hidden page's data — its `status`, and per
+`pageToItem` its `name` and entire `system` object. Nothing rendered it; it is present in memory
+anyway.
+
+So page-level ownership **within a journal the player can see** hides a page from display, not from
+the client. Same shape as the `objectiveSecrets` finding recorded earlier — content reaching the
+client and being hidden with CSS — but broader, because it covers a whole page presumed locked.
+
+**Consequence for how these tools should be used:** genuinely spoiler-sensitive prep belongs in its
+**own journal, with the journal hidden**, so the document never reaches the client.
+`create-simple-quest-page` already does this when called with `folder` (new journal, ownership NONE
+on both levels). The exposure appears only when `journalId` co-locates prep pages inside a journal
+players can already see — which is exactly what stage 4's check (d) did, producing the observed
+header.
+
+**Deliberately out of scope, so it is not mistaken for missing:** `hidden` on **block list items**
+(the third visibility surface the 7a design lists). The quest-facing axes are ownership and
+objective secrets, which is what the plan's gate line covers. Block items belong with a follow-on
+cycle that manages blocks properly.
+
 ##### 7a.4 gate result — 10/10 + UI confirmed, 2026-08-17 (`set-quest-progress`, 54 → 55 tools)
 
 Fixture: the shared `MCP Gate Fixture` quest page. **Both halves ran**: 10 data checks through the
@@ -2262,7 +2372,7 @@ that has to be **enforced**, not documented.
 > objective text** orphans state. So Phase 5's `replaceContent` refusal can be narrowed rather than
 > replaced with full key remapping — the old 7a checklist over-scoped this.
 
-**7a.5 — `set-journal-visibility`.** Owns `ownership` (page **and** journal), `system.objectiveSecrets`,
+**7a.5 — `set-journal-visibility`. ✅ DONE, gate passed (player-verified) 2026-08-17.** Owns `ownership` (page **and** journal), `system.objectiveSecrets`,
 and `hidden` on block list items. Reveal selectors resolve against the manifest from 0a:
 `"all"` · ordinals `[1]` · keys `["question-the-harbourmaster"]`.
 
@@ -2283,7 +2393,9 @@ matches nothing must fail loudly rather than falling back to index 0 — that is
 shape this project has now shipped five times. `index: "all"` covers "hide the whole block", since
 list blocks have no block-level flag and disappear only when every item is hidden.
 
-**Tool count: 51 → 56.**
+**Tool count: 51 → 56.** ✅ **Reached 2026-08-17.** All five tools built and gate-passed; the three
+foundation cycles (0a/0b/0c) landed first with no new tools. **0d remains** (journal-level
+reader/writer alignment), plus the two deferred surfaces noted below.
 
 ##### Gate design
 

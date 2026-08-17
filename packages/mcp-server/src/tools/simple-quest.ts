@@ -160,6 +160,38 @@ export class SimpleQuestTools {
           required: ['journalId', 'pageId'],
         },
       },
+      {
+        name: 'set-journal-visibility',
+        description:
+          'Control what players can see on a Simple Quest page. Two INDEPENDENT axes: visibleToPlayers grants or revokes access to the page itself (set on both the journal and the page, because a player needs OBSERVER on the journal to see the page at all), while revealObjectives/hideObjectives redact individual objectives inside a page they can already open. A secret objective on a hidden page changes nothing, and a revealed objective on a hidden page is still invisible. Objectives are addressed by key, exact text, or index, or "all"; a selector matching nothing fails loudly. If you reveal an objective nested under one that is still secret, the response reports hiddenByAncestor — the ancestor is NOT revealed automatically, since that would also expose its other children.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            journalId: { type: 'string', description: 'Journal containing the page.' },
+            pageId: {
+              type: 'string',
+              description:
+                'The Simple Quest page. Required for objective reveals. If omitted, only journal ownership changes and the response lists pages that remain hidden.',
+            },
+            visibleToPlayers: {
+              type: 'boolean',
+              description:
+                'true grants players OBSERVER on the journal and page; false revokes to NONE. Omit to leave access unchanged.',
+            },
+            revealObjectives: {
+              description:
+                'Objectives to un-secret: "all", or an array of keys, exact texts, or indices.',
+              oneOf: [{ type: 'string' }, { type: 'array', items: { type: ['string', 'number'] } }],
+            },
+            hideObjectives: {
+              description:
+                'Objectives to make secret: "all", or an array of keys, texts, or indices.',
+              oneOf: [{ type: 'string' }, { type: 'array', items: { type: ['string', 'number'] } }],
+            },
+          },
+          required: ['journalId'],
+        },
+      },
     ];
   }
 
@@ -322,6 +354,52 @@ export class SimpleQuestTools {
       this.logger.error('Failed to set quest progress', error);
       throw new Error(
         `Failed to set quest progress: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  async handleSetJournalVisibility(args: any): Promise<any> {
+    const selector = z.union([z.string(), z.array(z.union([z.string(), z.number()]))]);
+    const schema = z.object({
+      journalId: z.string().min(1),
+      pageId: z.string().optional(),
+      visibleToPlayers: z.boolean().optional(),
+      revealObjectives: selector.optional(),
+      hideObjectives: selector.optional(),
+    });
+
+    const request = schema.parse(args);
+
+    this.logger.info('Setting Simple Quest visibility', {
+      journalId: request.journalId,
+      pageId: request.pageId,
+      visibleToPlayers: request.visibleToPlayers,
+      revealing: request.revealObjectives,
+      hiding: request.hideObjectives,
+    });
+
+    try {
+      const result = await this.foundryClient.query(
+        'foundry-mcp-bridge.setJournalVisibility',
+        request
+      );
+
+      // This tool changes what players see by definition, so its outcomes are logged in
+      // full — including hiddenByAncestor, the case where the write succeeded and the
+      // players still see nothing.
+      if (result && result.success === false) {
+        this.logger.info('Visibility change refused', { reason: result.reason });
+      } else if (result?.hiddenByAncestor) {
+        this.logger.warn('Objectives revealed in data but hidden by a secret ancestor', {
+          hiddenByAncestor: result.hiddenByAncestor,
+        });
+      }
+
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to set visibility', error);
+      throw new Error(
+        `Failed to set visibility: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
