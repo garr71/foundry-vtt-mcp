@@ -438,9 +438,8 @@ export class QuestCreationTools {
                 `Refused: page "${target?.name ?? request.pageId}" is a Simple Quest quest page ` +
                 `(type: ${target.type}). Replacing its content would reset every objective ` +
                 `checkbox, because Simple Quest derives objective state keys from the objective ` +
-                `text itself. Nothing was modified. Edit the page in Foundry instead. ` +
-                `(Append mode does not work on these pages either: the journal reader returns ` +
-                `empty content for non-text page types.)`,
+                `text itself. Nothing was modified. Edit the page in Foundry instead, or read ` +
+                `it with list-journals — the reader returns its body and an objective manifest.`,
             };
           }
         }
@@ -480,11 +479,12 @@ export class QuestCreationTools {
           throw new Error(`Page not found: ${request.pageId}`);
         }
 
-        // getJournalPageContent returns `page.type === 'text' ? page.text.content : page.src`,
-        // so every non-text page reads as '' and append has nothing to build on. Upstream then
-        // hits a bare "no content to update" throw, which the catch turns into an opaque system
-        // error — the exact ambiguity that made the Phase 5 gate's check D unverifiable. Explain
-        // it instead, mirroring the replaceContent refusal.
+        // These pages are readable now (Phase 7a.0a), so this is no longer "there is nothing to
+        // append to" — it is a scope refusal. This tool appends quest-update HTML shaped for a
+        // plain text page; a module-defined subtype keeps structured state alongside its body
+        // that this path knows nothing about. Simple Quest pages get their own writers in 7a.
+        // Still returned rather than thrown: ErrorHandler.handleToolError discards the message,
+        // and the Phase 5 gate could not tell the guard firing from the tool breaking.
         if (pageResult.type && pageResult.type !== 'text') {
           this.logger.info('Append not possible: page type is not readable as text', {
             journalId: request.journalId,
@@ -501,8 +501,10 @@ export class QuestCreationTools {
             pageType: pageResult.type,
             message:
               `Cannot append to page "${pageResult.name ?? request.pageId}": its type is ` +
-              `"${pageResult.type}", not "text". The journal reader only returns body content ` +
-              `for text pages, so there is nothing to append to. Nothing was modified.` +
+              `"${pageResult.type}", not "text". This tool writes quest-update HTML shaped for ` +
+              `plain text pages and would ignore the structured state a module subtype keeps ` +
+              `alongside its body. Nothing was modified. The page is readable — list-journals ` +
+              `returns its content.` +
               (this.isSimpleQuestQuestPage(pageResult.type)
                 ? ' Simple Quest quest pages must be edited through Simple Quest itself; ' +
                   'replaceContent is refused on them as well, because it would reset every ' +

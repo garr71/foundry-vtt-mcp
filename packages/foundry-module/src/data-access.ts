@@ -1644,6 +1644,41 @@ class PersistentCreatureIndex {
   }
 }
 
+/**
+ * Foundry's four core page types (`common/documents/journal-entry-page.mjs` L32), of which
+ * these three keep their body in `src`. Module-defined subtypes are never in this set.
+ */
+const SRC_BACKED_PAGE_TYPES = new Set(['image', 'video', 'pdf']);
+
+/** The only Simple Quest subtype that carries objectives. */
+const SIMPLE_QUEST_QUEST_TYPE = 'simple-quest.quest';
+
+/** One `<li>` in a Simple Quest quest page body, in document order. */
+interface ObjectiveEntry {
+  index: number;
+  /** Nesting level; 0 for a top-level objective. */
+  depth: number;
+  /** `index` of the nearest enclosing objective, or null at top level. */
+  parentIndex: number | null;
+  /** The objective's own text, nested lists excluded. Display and matching, not writing. */
+  text: string;
+  /** Simple Quest's derived state key. The authority for any write. */
+  key: string;
+  /** 0 unchecked · 1 checked · 2 failed (Simple Quest `CHECKBOX_STATE`). */
+  state: number;
+  secret: boolean;
+  /** Another `<li>` derives this same key; they share one state entry. */
+  duplicateKey: boolean;
+}
+
+interface ObjectiveManifest {
+  objectives: ObjectiveEntry[];
+  /** Keys in `system.objectiveState` that no current `<li>` produces. */
+  orphanedStateKeys: string[];
+  /** Keys in `system.objectiveSecrets` that no current `<li>` produces. */
+  orphanedSecretKeys: string[];
+}
+
 export class FoundryDataAccess {
   private moduleId: string = MODULE_ID;
   private persistentIndex: PersistentCreatureIndex = new PersistentCreatureIndex();
@@ -4177,11 +4212,28 @@ export class FoundryDataAccess {
 
   /**
    * Get a specific journal page's content by ID
+   *
+   * Body resolution: only Foundry's four core types exist, and only three of them are
+   * src-backed. Every module-defined subtype — all eleven `simple-quest.*` pages, and
+   * `pf2e-bestiary-tracking`'s — stores its body in the core `text.content` like a text
+   * page does. This used to read `page.type === 'text' ? text.content : src`, so every
+   * one of them came back as `''`: not empty, just never looked at.
+   *
+   * `contentSource` says which field the body actually came from, so an empty string is
+   * distinguishable from a lookup that found nothing.
    */
   async getJournalPageContent(
     journalId: string,
     pageId: string
-  ): Promise<{ id: string; name: string; type: string; content: string } | null> {
+  ): Promise<{
+    id: string;
+    name: string;
+    type: string;
+    content: string;
+    contentSource: 'text.content' | 'src' | 'none';
+    system?: Record<string, unknown>;
+    objectives?: ObjectiveManifest;
+  } | null> {
     this.validateFoundryState();
 
     const journal = game.journal.get(journalId);
@@ -4194,11 +4246,158 @@ export class FoundryDataAccess {
       return null;
     }
 
+    const type = page.type || 'text';
+    const textContent = typeof page.text?.content === 'string' ? page.text.content : '';
+    const src = typeof page.src === 'string' ? page.src : '';
+
+    // 'image' | 'video' | 'pdf' keep their src. Note the check is on the type, not on which
+    // field happens to be populated: a src-backed page that also carries stray text.content
+    // must still read as its src, or this "fix" silently changes what an image page returns.
+    let content: string;
+    let contentSource: 'text.content' | 'src' | 'none';
+    if (SRC_BACKED_PAGE_TYPES.has(type)) {
+      content = src;
+      contentSource = src ? 'src' : 'none';
+    } else {
+      content = textContent;
+      contentSource = textContent ? 'text.content' : 'none';
+    }
+
+    // toObject(), not the live system object: SetField initialises to a real Set, which
+    // serialises across the WebSocket as {}. Fifth time this project has hit that — here it
+    // would silently empty `system.tags` and an achievement's `awardedTo`.
+    const system =
+      typeof page.system?.toObject === 'function'
+        ? (page.system.toObject() as Record<string, unknown>)
+        : undefined;
+
     return {
       id: page.id || '',
       name: page.name || '',
-      type: page.type || 'text',
-      content: page.type === 'text' ? page.text?.content || '' : page.src || '',
+      type,
+      content,
+      contentSource,
+      ...(system ? { system } : {}),
+      ...(type === SIMPLE_QUEST_QUEST_TYPE
+        ? { objectives: await this.parseQuestObjectives(page) }
+        : {}),
+    };
+  }
+
+  /**
+   * Parse a Simple Quest quest page's objectives into the manifest its state is keyed by.
+   *
+   * This lives module-side because it cannot live anywhere else: the key derivation needs
+   * `enrichHTML`, a DOM, and Foundry's own `String#slugify`, none of which exist on the
+   * server. It lives in the reader rather than in the reveal tool because create, progress
+   * and visibility all need the same parse.
+   *
+   * Mirrors Simple Quest 5.1.4 `JournalPageHelpers._getObjectiveKey` exactly. Three details
+   * in that one line are load-bearing, and all three are visible in the shipped example page:
+   *
+   *   1. The text is the li's FULL `textContent`, descendants included. The parent li "The
+   *      Tabs:" keys as `the-tabsthe-header-shows-all-the-folders-containe`, not `the-tabs`.
+   *   2. The 50-character slice happens BEFORE the slugify, which is why that key ends
+   *      mid-word on "containe".
+   *   3. Foundry's slugify turns only whitespace into separators; `strict` then deletes the
+   *      remaining punctuation IN PLACE. That is why "Tabs:The" becomes "tabsthe" with no
+   *      dash, while "(Tabs)" becomes "-tabs-".
+   *
+   * Do not reimplement it — note this file already has an unrelated local `slugify()` for
+   * dnd5e feature identifiers, and it gets rule 3 wrong.
+   */
+  private async parseQuestObjectives(page: any): Promise<ObjectiveManifest> {
+    const objectiveState: Record<string, number> = page.system?.objectiveState ?? {};
+    const objectiveSecrets: Record<string, boolean> = page.system?.objectiveSecrets ?? {};
+    const html = typeof page.text?.content === 'string' ? page.text.content : '';
+
+    const objectives: ObjectiveEntry[] = [];
+
+    if (html) {
+      // Simple Quest scans the RENDERED page, and `JournalPageHelpers._renderHTML` enriches
+      // the part's innerHTML before that scan runs. An `@QUEST[uuid]{Label}` inside an li is
+      // its label by then, so the key derives from enriched text. Parsing the raw content
+      // would give a different slug for any li carrying an enricher.
+      //
+      // `secrets: true` matches the GM's DOM, which is the one we act as. Known divergence,
+      // and Simple Quest's, not ours: a player's client strips unrevealed secret sections
+      // before deriving keys, so an li *containing* one keys differently for them.
+      const enriched: string = await (
+        foundry as any
+      ).applications.ux.TextEditor.implementation.enrichHTML(html, {
+        relativeTo: page,
+        secrets: true,
+      });
+
+      // DOMParser rather than innerHTML on a live element: inert, and it will not fetch
+      // every image on the page when all we want is text.
+      const doc = new DOMParser().parseFromString(enriched, 'text/html');
+
+      // quest-view.hbs puts only `{{{text.enriched}}}` inside `.content`, and that is the
+      // element Simple Quest scans — so every li in the body counts, and the Reward block
+      // in the sidebar does not. Scanning the parsed body is equivalent.
+      const listItems = Array.from(doc.querySelectorAll('li'));
+      const indexOf = new Map<Element, number>(listItems.map((li, i) => [li, i]));
+
+      for (const [index, li] of listItems.entries()) {
+        const key = ((li.textContent ?? '').trim().slice(0, 50) as any).slugify({
+          strict: true,
+        }) as string;
+
+        // The li's own text, with nested lists cut out — "the objective" as a human says it.
+        // `key` is derived from the full subtree, so the two deliberately disagree on a
+        // parent li; `key` is the authority for any write.
+        const clone = li.cloneNode(true) as Element;
+        clone.querySelectorAll('ul, ol').forEach(nested => nested.remove());
+        const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+        let depth = 0;
+        let parentIndex: number | null = null;
+        for (let node = li.parentElement; node; node = node.parentElement) {
+          if (node.tagName !== 'LI') continue;
+          depth++;
+          if (parentIndex === null) parentIndex = indexOf.get(node) ?? null;
+        }
+
+        objectives.push({
+          index,
+          depth,
+          parentIndex,
+          text,
+          key,
+          // Absent means unchecked, matching JournalPageHelpers L455. Unlike the fallbacks
+          // this project keeps getting wrong, a miss here is not distinguishable in
+          // principle: Simple Quest renders "no entry" and "stored 0" identically.
+          state: objectiveState[key] ?? 0,
+          secret: objectiveSecrets[key] === true,
+          duplicateKey: false,
+        });
+      }
+
+      // Two li's whose first 50 characters match derive one key and therefore share one
+      // checkbox. Simple Quest's own example page warns about it and provides no defence.
+      // Flag it rather than dedupe: a write addressed to a shared key moves both.
+      const keyCounts = new Map<string, number>();
+      for (const objective of objectives) {
+        keyCounts.set(objective.key, (keyCounts.get(objective.key) ?? 0) + 1);
+      }
+      for (const objective of objectives) {
+        objective.duplicateKey = (keyCounts.get(objective.key) ?? 0) > 1;
+      }
+    }
+
+    // Stored keys no li produces — left behind when objective text was edited after the
+    // state was written. The shipped example carries two. They are dead weight in the
+    // document, and reporting them is what distinguishes "this objective is unchecked"
+    // from "this objective's state was orphaned by a rewrite".
+    const liveKeys = new Set(objectives.map(objective => objective.key));
+    const orphaned = (record: Record<string, unknown>) =>
+      Object.keys(record).filter(key => !liveKeys.has(key));
+
+    return {
+      objectives,
+      orphanedStateKeys: orphaned(objectiveState),
+      orphanedSecretKeys: orphaned(objectiveSecrets),
     };
   }
 

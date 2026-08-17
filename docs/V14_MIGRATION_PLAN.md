@@ -1838,22 +1838,119 @@ One tool per deploy cycle, per the standing cadence rule.
 **7a.0 — Foundation (three cycles, no new tools).** All three are generic defect fixes with value
 beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
 
-- [ ] **0a · Reader.** `getJournalPageContent` returns `text.content` when the page has one, keeps
-      `src` for genuinely src-backed types, and adds `system` to the payload. Also returns a parsed
-      **objective manifest** for `simple-quest.quest` — `{index, depth, text, key, state, secret}`
-      per `<li>`, document order. The manifest lives here, not in the reveal tool, because
-      `create-simple-quest-page` and `set-quest-progress` need the same parse.
+- [x] **0a · Reader.** ✅ **DONE, gate passed 2026-08-16.** `getJournalPageContent` returns
+      `text.content` when the page has one, keeps `src` for genuinely src-backed types, and adds
+      `system` to the payload. Also returns a parsed **objective manifest** for
+      `simple-quest.quest` — `{index, depth, text, key, state, secret}` per `<li>`, document order.
+      The manifest lives here, not in the reveal tool, because `create-simple-quest-page` and
+      `set-quest-progress` need the same parse.
       **Module-side, necessarily:** key derivation needs `enrichHTML`, a DOM, and Foundry's
       `String#slugify`, none of which exist server-side. It must run against the **enriched** DOM —
       an `@QUEST[…]{Label}` inside an `<li>` changes `textContent` and therefore the slug.
+      See **0a as built** below for four corrections the installed source forced.
 - [ ] **0b · Writer.** `createJournalEntry` / `updateJournalContent` accept `type` and `system`
       instead of hardcoding `type: 'text'` (`data-access.ts` L4054, L4238). Unknown-key validation
-      lands here, so both write tools inherit it.
+      lands here, so both write tools inherit it. **Also carries `getJournalContent`** — see 0a's
+      scope note.
 - [ ] **0c · Search.** `handleSearchJournals` skips every non-text page
       (`quest-creation.ts` L764: `if (page.type !== 'text') continue;`). Every SQ page we create
       would be unsearchable. Fix the skip. Note in passing: it also does one WebSocket round trip
       per page, which will be slow in a module world — **measure before optimising**, do not bundle
       a rewrite into this cycle.
+
+##### 0a gate result — 8/8, 2026-08-16
+
+Driven through the control port (`call_tool`), so every value below is the tool's verbatim response.
+Fixture: `Welcome to Simple Quest`, page `ApRdPC9GJhXtllVU` in journal `B8K7C52dhISV83Fi`.
+
+| #   | Check                                                    | Result                                                 |
+| --- | -------------------------------------------------------- | ------------------------------------------------------ |
+| 1   | Body reads from `text.content`                           | `contentSource=text.content`, 4317 chars (was `""`)    |
+| 2   | `system` carried                                         | 12 keys incl. `status`, `objectiveState`, `questGiver` |
+| 3   | 7 live stored keys reproduced verbatim                   | 7/7                                                    |
+| 4   | **Discriminator:** nested descent + slice-before-slugify | long key present, `the-tabs` absent                    |
+| 5   | Orphans reported, not invented as objectives             | `["integer-nec-justo-dolor","nullam-malesuada"]`       |
+| 6   | Manifest is the page, not the state log                  | 31 `<li>` vs 9 stored keys                             |
+| 7   | `depth` / `parentIndex` resolve nesting                  | child `depth=1`, parent resolves to the long key       |
+| 8   | **Regression, branch not taken:** core `image` page      | `"Watchmage"` → `contentSource=src`, path intact       |
+
+**The deploy verified itself.** Old code physically cannot emit `contentSource` or `objectives`, so
+their presence is proof the browser was running the new module — stronger than a timestamp.
+
+**Second pass over all 14 `simple-quest.*` pages in the world.** 10 of 14 now return a body that
+previously read as `""`. The `SetField` claim is proven with **non-empty** sets, not just shape:
+`tags=["steamy","rocky","firey"]` (map), `["grey","robed"]` (character), `["Great","Gig","Sky"]`
+(location), `awardedTo=[]` (achievement) — arrays, not `{}`. The three pages reading
+`contentSource=none` (two `era`, one `map`) are genuinely empty bodies: those types keep their
+data in typed fields and flags. That is the field earning its place — "empty" and "not found" are
+now different answers.
+
+**⚠️ Three branches shipped unexercised**, stated rather than left to be discovered:
+`duplicateKey: true` (no two `<li>`s in the fixture share a 50-character prefix), `secret: true`,
+and a non-empty `orphanedSecretKeys` (the fixture's `objectiveSecrets` is `{}`). All three are
+report-only flags whose failure mode is under-reporting, not corruption. `secret: true` closes with
+one alt+left-click in the Simple Quest UI; the other two need the writer from 0b.
+
+##### 0a as built (2026-08-16) — four corrections from the installed source
+
+**1. ⚠️ The gate criterion in the table below was unpassable, and this is the important one.**
+It said the shipped `objectiveState`'s 9 keys are the oracle and "our parser must reproduce that
+set **exactly**". It cannot, and it must not. `objectiveState` is **not a manifest of the page's
+objectives** — it is a sparse write log. Simple Quest only stores a key once that checkbox has been
+touched, and it never prunes keys whose text later changed. Scanning the shipped `quest.json`:
+
+|                                    |                                                       |
+| ---------------------------------- | ----------------------------------------------------- |
+| `<li>` elements in the page body   | **31**                                                |
+| Keys stored in `objectiveState`    | **9**                                                 |
+| Stored keys our parser reproduces  | **7**, exact string match                             |
+| Stored keys matching **no** `<li>` | **2** — `integer-nec-justo-dolor`, `nullam-malesuada` |
+
+Those two are lorem-ipsum leftovers from an earlier draft of the example. So the real criterion is
+**containment plus an orphan set**, not equality: the 7 live keys must appear verbatim among the 31,
+and the 2 must appear in `orphanedStateKeys` and **not** in the manifest. That is strictly the
+stronger test — set-equality could be passed by a parser that just echoed `objectiveState` back,
+and the orphan half is what makes that impossible.
+
+The long key `the-tabsthe-header-shows-all-the-folders-containe` still discriminates exactly as the
+plan claimed: it proves `textContent` descends into the nested `<ul>` **and** that the slice to 50
+happens before the slugify. A parser emitting `the-tabs` is wrong and this fixture says so.
+
+**2. Enrichment happens, but not where reading one method would suggest.** `JournalPageQuest`'s
+`_prepareContext` assigns `context.text.enriched = context.text.content` — raw — with the real
+enrich call sitting **commented out** above it (`JournalPageHelpers.js` L300-311). Stopping there
+gives the opposite of the truth. `_renderHTML` (L325-332) then re-enriches the entire rendered
+part's `innerHTML` before `onRenderView` scans it. So the plan's requirement was right and the
+mechanism was different — the conclusion survived only because the whole render path was read.
+
+**3. `String#slugify` separates on whitespace only.** Core (`common/primitives/string.mjs` L73-83)
+folds diacritics, converts **whitespace** runs to `-`, and only then, under `strict`, deletes every
+remaining non-alphanumeric **in place**. Hence `"Tabs:The"` → `tabsthe` with no dash, while
+`"(Tabs)"` → `-tabs-`. Reimplementing this is how the port goes wrong, so 0a calls Foundry's own
+method — note `data-access.ts` already has an unrelated local `slugify()` for dnd5e feature
+identifiers which gets this rule wrong and must not be reused here.
+
+**4. Scope line: `getJournalContent` is deferred to 0b on purpose, not overlooked.** The
+journal-level reader picks `pages.find(p => p.type === 'text')` and has the identical defect, so an
+SQ journal reads as empty at the journal level. It is held back because its consumer round-trips:
+`update-quest-journal`'s append-without-`pageId` path reads through `getJournalContent` and writes
+through `updateJournalContent`, which does its own first-`text`-page lookup. Fixing the read alone
+would make append **read page A and write page B** — silent cross-page corruption. Reader and
+writer move together in 0b.
+
+Also found, and it matters for 7a.5: **`_setupSecretToggles` is commented out** in
+`JournalPageQuest.onRenderView` (L96). `objectiveSecrets` is still fully live — honoured at render
+(secret `<li>`s get `.hidden` for non-owners, `.secret` for the GM) and toggled by **alt+left-click**
+on the checkbox. Only the separate toggle UI is gone. Writing the field still works and is still
+visible; the gate for 7a.5 must use alt-click, not a toggle that no longer renders.
+
+**Beyond the plan's field list**, the built manifest also returns `parentIndex` (7a.5's
+`hiddenByAncestor` needs the ancestor relation, and it belongs in the parse rather than duplicated
+in the reveal tool), `duplicateKey` (two `<li>`s whose first 50 characters match derive one key and
+share one checkbox — SQ's own example page warns about this and provides no defence), and
+`orphanedStateKeys` / `orphanedSecretKeys`. The payload also gains `contentSource`
+(`text.content` | `src` | `none`), so an empty body is distinguishable from a lookup that found
+nothing — the house failure mode, stated in the response instead of left to be rediscovered.
 
 **7a.1 — `get-simple-quest-context`.** Live schemas via SQ's own `exportAllSchemas({toFile:false})`,
 plus the folder/tab structure (root + the five `simpleQuestDir`-flagged folders + tab folders with
@@ -1914,17 +2011,17 @@ fixture and what distinguishes a pass from an accident.
 Structure" (or `createAdvancedFolders()` from the console). Confirm fixture **identity**, not just
 name, before trusting a result.
 
-| Cycle | Check that can actually fail                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0a    | **The shipped `objectiveState` keys are the oracle.** `quest.json` stores **9** keys for the example page. Our parser must reproduce that set **exactly**. The long key `the-tabsthe-header-shows-all-the-folders-containe` is the discriminator: it proves `textContent` includes descendant text **and** that the slice-to-50 happens **before** slugify. A parser that emits `the-tabs` is wrong and this fixture says so. |
-| 0a    | Regression: a core `image` page must still return its `src`. The happy path does not test the branch it did not take.                                                                                                                                                                                                                                                                                                         |
-| 0b    | Create a `simple-quest.lore` page, read back `page.type`. Then submit `system.description` and assert it is **rejected by name** — proving validation ran, rather than the key being silently dropped as it is today. Also: omitting `type` must still yield `text`.                                                                                                                                                          |
-| 0c    | Search a string present **only** in an SQ page's `text.content` and in no `text` page. Before: 0 hits. After: 1 hit with the right `pageId`. If the string also occurs in a text page, the check proves nothing.                                                                                                                                                                                                              |
-| 1     | Assert the returned quest schema **contains** `questGiver`/`status`/`objectiveState` and **does not contain** `description`. The absence is the discriminating half: it proves we read the live DataModel and not the stale `module.json`.                                                                                                                                                                                    |
-| 2     | **Call with no `status` argument** and assert `-1`. Passing `-1` explicitly passes on SQ's default too, so it proves nothing.                                                                                                                                                                                                                                                                                                 |
-| 3     | **Away and back:** set `questGiver` to a new value, verify, set it back. Setting it to what it already holds is indistinguishable from the write being ignored. Separately, write `questGiver` **only** and assert `difficulty` is unchanged — that is the check that fails if the merge is really a replace. Read `system.tags` back and assert it is an array, not `{}`.                                                    |
-| 4     | Toggle an objective to checked, then failed, then back to unchecked, **watching the Simple Quest UI** rather than the tool response. Then append an objective and assert all 9 pre-existing keys survive in `objectiveState` **and still render checked**.                                                                                                                                                                    |
-| 5     | **Verify from a real player login**, not by reading fields back — the two-level ownership gotcha makes every field read pass while the player sees nothing. Then reveal a child whose parent is still secret and assert the response reports `hiddenByAncestor` **and** the player still cannot see it.                                                                                                                       |
+| Cycle | Check that can actually fail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0a    | ⚠️ **Corrected 2026-08-16 — see "0a as built" above.** `objectiveState` is a sparse write log, not a manifest: **31** `<li>`s, **9** stored keys, **2** of them orphans. The check is containment plus orphans, not equality — the 7 live keys must appear verbatim in the manifest, and `integer-nec-justo-dolor` / `nullam-malesuada` must appear in `orphanedStateKeys` and nowhere else. Set-equality could be passed by a parser that merely echoed `objectiveState` back; the orphan half cannot. The long key `the-tabsthe-header-shows-all-the-folders-containe` is the discriminator: it proves `textContent` includes descendant text **and** that the slice-to-50 happens **before** slugify. A parser that emits `the-tabs` is wrong and this fixture says so. |
+| 0a    | Regression: a core `image` page must still return its `src`. The happy path does not test the branch it did not take.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 0b    | Create a `simple-quest.lore` page, read back `page.type`. Then submit `system.description` and assert it is **rejected by name** — proving validation ran, rather than the key being silently dropped as it is today. Also: omitting `type` must still yield `text`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 0c    | Search a string present **only** in an SQ page's `text.content` and in no `text` page. Before: 0 hits. After: 1 hit with the right `pageId`. If the string also occurs in a text page, the check proves nothing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 1     | Assert the returned quest schema **contains** `questGiver`/`status`/`objectiveState` and **does not contain** `description`. The absence is the discriminating half: it proves we read the live DataModel and not the stale `module.json`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 2     | **Call with no `status` argument** and assert `-1`. Passing `-1` explicitly passes on SQ's default too, so it proves nothing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 3     | **Away and back:** set `questGiver` to a new value, verify, set it back. Setting it to what it already holds is indistinguishable from the write being ignored. Separately, write `questGiver` **only** and assert `difficulty` is unchanged — that is the check that fails if the merge is really a replace. Read `system.tags` back and assert it is an array, not `{}`.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 4     | Toggle an objective to checked, then failed, then back to unchecked, **watching the Simple Quest UI** rather than the tool response. Then append an objective and assert the 7 live pre-existing keys survive in `objectiveState` **and still render checked** (the other 2 stored keys are orphans and prove nothing).                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 5     | **Verify from a real player login**, not by reading fields back — the two-level ownership gotcha makes every field read pass while the player sees nothing. Then reveal a child whose parent is still secret and assert the response reports `hiddenByAncestor` **and** the player still cannot see it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ##### Traps carried into this phase
 
