@@ -4063,6 +4063,117 @@ export class FoundryDataAccess {
   // ===== PHASE 2 & 3: WRITE OPERATIONS =====
 
   /**
+   * Read Simple Quest's live page schemas and folder layout.
+   *
+   * The schemas come from Simple Quest's own exporter, reached through the public API it
+   * publishes on the `ready` hook (`main.js` L128-134). Reading the live DataModel is the
+   * whole point: SQ is a protected module on a release cadence we do not control, and a
+   * hand-mirrored schema would rot silently while this cannot.
+   *
+   * ⚠️ Two traps in that exporter, both load-bearing:
+   *
+   * 1. `exportAllSchemas()` defaults to `toFile: true`, which calls `saveDataToFile` and
+   *    triggers a **browser download** on the GM's machine. Always pass `toFile: false`.
+   * 2. It **skips every field marked `hideInConfig`** (`JournalPageSchemaExporter.js` L34,
+   *    L54) because it was written to drive a config form. `objectiveState` and
+   *    `objectiveSecrets` are both declared that way (`JournalPageQuest.js` L39-46) — so
+   *    SQ's own export omits precisely the two fields our progress and visibility tools
+   *    have to write. We add them back from the live schema, marked `hideInConfig`, and
+   *    list them in `hiddenFields` so the omission is visible rather than inferred.
+   */
+  async getSimpleQuestContext(): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const moduleId = 'simple-quest';
+    const module = game.modules?.get(moduleId);
+
+    // Returned, not thrown: ErrorHandler.handleToolError would replace this with a generic
+    // template, and "the module is not installed" is the one thing the caller needs to know.
+    if (!module?.active) {
+      return {
+        available: false,
+        reason: module
+          ? `The "${moduleId}" module is installed but not active in this world.`
+          : `The "${moduleId}" module is not installed in this world.`,
+      };
+    }
+
+    const api = (module as any).api;
+    const dataModels = (CONFIG as any).JournalEntryPage?.dataModels ?? {};
+
+    let pageTypes: Record<string, any> = {};
+    let schemaSource = 'simple-quest.api.exportAllSchemas';
+
+    if (typeof api?.exportAllSchemas === 'function') {
+      // toFile:false is mandatory — the default writes a .json download to the GM's browser.
+      pageTypes = (await api.exportAllSchemas({ toFile: false, singleFile: false })) ?? {};
+    } else {
+      schemaSource = 'unavailable';
+    }
+
+    // Restore the fields the exporter hides, so the write tools are actually self-describing.
+    for (const [type, model] of Object.entries(pageTypes)) {
+      const schema = dataModels[`${moduleId}.${type}`]?.schema;
+      if (!schema?.fields || !model || typeof model !== 'object') continue;
+
+      const m = model as any;
+      m.fields ??= {};
+      const hiddenFields: string[] = [];
+
+      for (const [key, field] of Object.entries<any>(schema.fields)) {
+        if (key in m.fields) continue;
+        hiddenFields.push(key);
+        m.fields[key] = {
+          type: field?.constructor?.name ?? 'unknown',
+          hideInConfig: true,
+          ...(field?.options?.default !== undefined ? { default: field.options.default } : {}),
+        };
+      }
+
+      if (hiddenFields.length > 0) {
+        m.hiddenFields = hiddenFields;
+      }
+    }
+
+    // Folder layout. The five special directories are identified by a flag, never by name —
+    // `StaticDirectories.isType` (helpers.js L34-36) is the only thing that defines them, and
+    // a folder named "Quests" that lacks the flag is not the quests directory.
+    const dirFlag = (folder: any): string | null =>
+      folder?.getFlag?.(moduleId, 'simpleQuestDir') ?? null;
+
+    const journalFolders = Array.from<any>(game.folders ?? []).filter(
+      (f: any) => f.type === 'JournalEntry'
+    );
+
+    const special: Record<string, { id: string; name: string } | null> = {};
+    for (const key of ['root', 'quests', 'party', 'timeline', 'achievements']) {
+      const found = journalFolders.find((f: any) => dirFlag(f) === key);
+      special[key] = found ? { id: found.id, name: found.name } : null;
+    }
+
+    const rootFolder = journalFolders.find((f: any) => dirFlag(f) === 'root');
+    const tabs = (rootFolder?.children ?? [])
+      .map((child: any) => child?.folder)
+      .filter(Boolean)
+      .map((folder: any) => ({
+        id: folder.id,
+        name: folder.name,
+        icon: folder.getFlag?.(moduleId, 'icon') ?? null,
+        specialDirectory: dirFlag(folder),
+        journalCount: folder.contents?.length ?? 0,
+      }));
+
+    return {
+      available: true,
+      version: (module as any).version ?? null,
+      schemaSource,
+      pageTypes,
+      pageTypeNames: Object.keys(pageTypes).sort(),
+      folders: { special, tabs },
+    };
+  }
+
+  /**
    * Resolve the page types this world will accept, and say where each came from.
    *
    * `Document.TYPES` reads `game.model`, which is built from the system and active modules.

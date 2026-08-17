@@ -1876,6 +1876,66 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
 
+##### 7a.1 gate result — 10/10, 2026-08-16 (`get-simple-quest-context`, 51 → 52 tools)
+
+Read-only gate. Simple Quest 5.1.4, `schemaSource: simple-quest.api.exportAllSchemas`.
+
+| #   | Check                                                    | Result                                                |
+| --- | -------------------------------------------------------- | ----------------------------------------------------- |
+| 0   | Tool registered                                          | 52 tools on the control port                          |
+| 1   | Module available                                         | v5.1.4, live API reached                              |
+| 2   | All 11 page types                                        | achievement…quest                                     |
+| 3   | Quest schema has `questGiver` + `status`                 | 12 fields                                             |
+| 4   | **Discriminator:** no `description` / `objectives` field | absent — live model, not stale `module.json`          |
+| 5   | `objectiveState` + `objectiveSecrets` present            | both restored                                         |
+| 6   | The restoration is declared                              | `hiddenFields: ["objectiveState","objectiveSecrets"]` |
+| 7   | `status` is a `NumberField` with 4 choices               | confirms the earlier string-keys correction           |
+| 8   | Special directories resolved **by flag**                 | root/quests/party/timeline/achievements all found     |
+| 9   | Tab folders with icons                                   | 10 tabs, e.g. `Quests [fas fa-compass]`               |
+
+**Checks 4 and 5 are the discriminating pair, and they fail in opposite directions.** 4 fails if we
+read the stale `module.json` (which advertises `description.content` / `objectives.content` under
+`htmlFields`); 5 fails if we read the live model _naively_. Neither alone would have caught the
+defect below.
+
+###### ⚠️ Simple Quest's own exporter omits the two fields 7a.4 and 7a.5 must write
+
+`JournalPageSchemaExporter.js` skips every field marked `hideInConfig` (L34, L54) — it was written
+to drive a config form. `objectiveState` and `objectiveSecrets` are both declared `hideInConfig:
+true` (`JournalPageQuest.js` L39-46). So `exportAllSchemas()` returns a quest schema **without
+them**, and using it verbatim would have shipped a "self-describing" context tool that hides the
+only fields the progress and visibility tools exist to change — and would have failed this phase's
+own gate line, which asserts `objectiveState` is present.
+
+Fixed by walking the live schema for fields the export omitted, adding them back marked
+`hideInConfig: true`, and listing them in `hiddenFields`. `hideInConfig` is a UI concern, not a
+data one. The supplement also recovered four fields on `investigation` (`src`, `items`,
+`connections`, `stamps`).
+
+**A sixth variant of the house failure mode, and a new shape: not a silent default but a silent
+_omission_** — a library function quietly answering a narrower question than the one asked.
+Same tell: nothing in the response distinguishes "this field does not exist" from "this field was
+not included."
+
+Also: **`exportAllSchemas()` defaults to `toFile: true`**, which calls `saveDataToFile` and triggers
+a **browser download on the GM's machine**. `toFile: false` is mandatory and the name does not hint
+at it.
+
+Field counts confirm the granularity decision: lore 26, faction 19, location 18, character 14 —
+per-type tools would have been six large, near-identical schemas resident in every session.
+
+###### ⚠️ Deploy verification was checking the wrong invariant
+
+The first run failed with 51 tools and `Unknown tool`. Cause: an earlier compound command aborted
+on a path guard **before** `bundle:server` ran, so `dist/backend.js` had the new tool and
+`backend.bundle.cjs` did not. The deploy check compared the repo bundle's hash to the deployed
+bundle's — they matched, because **both were stale**.
+
+**Hash-matching deployed against repo proves they are the same, not that either is current.**
+Verify a deploy by asserting the artifact _contains the change_ (`Select-String` for the new tool
+name), or by the control-port tool count — not by comparing two files that a skipped build step
+leaves equally old.
+
 ##### 0c gate result — 5/5, 2026-08-16
 
 Read-only gate; nothing was written. Baseline captured **before** deploying, which is the half
@@ -2050,7 +2110,7 @@ share one checkbox — SQ's own example page warns about this and provides no de
 (`text.content` | `src` | `none`), so an empty body is distinguishable from a lookup that found
 nothing — the house failure mode, stated in the response instead of left to be rediscovered.
 
-**7a.1 — `get-simple-quest-context`.** Live schemas via SQ's own `exportAllSchemas({toFile:false})`,
+**7a.1 — `get-simple-quest-context`. ✅ DONE, gate passed 10/10 2026-08-16.** Live schemas via SQ's own `exportAllSchemas({toFile:false})`,
 plus the folder/tab structure (root + the five `simpleQuestDir`-flagged folders + tab folders with
 their icons). Read-only, cheap, and makes the write tools self-describing.
 

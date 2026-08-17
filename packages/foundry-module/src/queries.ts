@@ -62,6 +62,8 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.getJournalContent`] = this.handleGetJournalContent.bind(this);
     CONFIG.queries[`${modulePrefix}.getJournalPageContent`] =
       this.handleGetJournalPageContent.bind(this);
+    CONFIG.queries[`${modulePrefix}.getSimpleQuestContext`] =
+      this.handleGetSimpleQuestContext.bind(this);
     CONFIG.queries[`${modulePrefix}.updateJournalContent`] =
       this.handleUpdateJournalContent.bind(this);
 
@@ -673,6 +675,24 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to get journal page content: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle Simple Quest context request (live page schemas + folder layout)
+   */
+  async handleGetSimpleQuestContext(): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      return await this.dataAccess.getSimpleQuestContext();
+    } catch (error) {
+      throw new Error(
+        `Failed to get Simple Quest context: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

@@ -45,6 +45,8 @@ import { ChatTools } from './tools/chat.js';
 
 import { JournalTools } from './tools/journal.js';
 
+import { SimpleQuestTools } from './tools/simple-quest.js';
+
 import { PlaylistTools } from './tools/playlist.js';
 
 import { DSA5CharacterCreator } from './systems/dsa5/character-creator.js';
@@ -1230,6 +1232,8 @@ async function startBackend(): Promise<void> {
 
   const journalTools = new JournalTools({ foundryClient, logger });
 
+  const simpleQuestTools = new SimpleQuestTools({ foundryClient, logger });
+
   const playlistTools = new PlaylistTools({ foundryClient, logger });
 
   // Initialize mapgen-style backend components for map generation
@@ -1463,6 +1467,8 @@ async function startBackend(): Promise<void> {
     ...chatTools.getToolDefinitions(),
 
     ...journalTools.getToolDefinitions(),
+
+    ...simpleQuestTools.getToolDefinitions(),
 
     ...playlistTools.getToolDefinitions(),
 
@@ -1809,6 +1815,12 @@ async function startBackend(): Promise<void> {
 
                 case 'show-journal-to-players':
                   result = await journalTools.handleShowJournalToPlayers(args);
+
+                  break;
+
+                // Simple Quest tools
+                case 'get-simple-quest-context':
+                  result = await simpleQuestTools.handleGetSimpleQuestContext(args);
 
                   break;
 
