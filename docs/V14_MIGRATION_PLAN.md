@@ -2466,6 +2466,39 @@ name, before trusting a result.
 - "The symbol still exists" is not "the behaviour still exists". Read the call site.
 - Confirm a module is installed before scheduling work against it. SQ **is** installed at 5.1.4.
 
+#### ▶️ START HERE NEXT SESSION (written 2026-08-17, end of Session 11)
+
+**State:** Phase 7a is **complete** — 0a/0b/0c/0d plus five tools, all gate-passed, 51 → **56 tools**.
+`master` and `origin/master` are level. Nothing is half-built and nothing is blocked on a decision.
+
+**Next cycle: 7b.0 — the flags foundation**, the first cycle of the phase designed immediately below.
+No new tools; it is the write path that 7b.3 and 7b.4 both need. Namespace-scoped to
+`flags['simple-quest']` on both JournalEntry and JournalEntryPage, with each caller declaring its own
+allowed key set, because flags are schema-less and 0b's live-schema validation has no equivalent here.
+
+**Before writing any of it, do these three things:**
+
+1. **Re-read `Timeline.js` L114-159.** The phase is built around the orphaned-event trap and the
+   exclusive `eraEnd`; do not take this document's word for either.
+2. **Settle the `relativeTo: era` question** (L130) before 7b.4 is designed in detail. If a counter in
+   an event body really does write to the containing era's flags, `set-quest-counter`'s target is not
+   the page the text lives on, and that changes its signature.
+3. **Verify the assumption the phase leans on:** that `create-simple-quest-page` already writes
+   `simple-quest.event` and `simple-quest.era` pages correctly. It should — the tool is generic over
+   type — but it is an inference from our own code, not an observation. One call settles it.
+
+**Deploy state:** backend and module artifacts on disk match HEAD, verified by content rather than by
+hash (a stale bundle matched by hash and cost a gate this session). The running backend was started
+directly with `node backend.bundle.cjs`, not by Claude Desktop; a Claude Desktop restart will reuse
+it via the lock file.
+
+**Housekeeping carried over:** the `MCP Gate Fixture` and `MCP Gate 0d *` journals in the `Quests`
+folder are gate litter and can be deleted by name prefix. There is still **no journal-delete tool**,
+and adding one was declined on purpose — a permanently-resident destructive tool to serve a testing
+convenience is a bad trade.
+
+---
+
 #### 7b — Timeline & enrichers 🕰️ ⬜ **designed 2026-08-17, not started**
 
 > **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
