@@ -91,7 +91,7 @@ export class SimpleQuestTools {
       {
         name: 'update-simple-quest-page',
         description:
-          'Update an existing Simple Quest page. System fields MERGE — fields you do not name keep their current values. Use this for prose and metadata (questGiver, difficulty, location, tags, block content). It will NOT touch objectiveState (use set-quest-progress) or ownership (use the visibility tool), and it refuses a body rewrite that would strand objective state, since Simple Quest keys objective checkboxes by a slug of the objective text. Appending new objectives is safe and allowed. Returns which system fields changed and which did not.',
+          'Update an existing Simple Quest page. System fields MERGE — fields you do not name keep their current values. Use this for prose and metadata (questGiver, difficulty, location, tags, block content). It will NOT touch objectiveState (use set-quest-progress) or ownership (use the visibility tool), and it refuses a body rewrite that would strand objective state, since Simple Quest keys objective checkboxes by a slug of the objective text. Appending new objectives is safe and allowed. Can also set page counters via "flags" (the @COUNT / @REPUTATION state). Returns which system fields changed and which did not.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -113,6 +113,11 @@ export class SimpleQuestTools {
               description:
                 'Only if you intend to lose objective state that a body rewrite would strand. Default false.',
               default: false,
+            },
+            flags: {
+              type: 'object',
+              description:
+                'Simple Quest page flags to merge. Only "counters" is managed here: an object of counter id to number, backing the @COUNT and @REPUTATION enrichers in the page body, e.g. {"counters":{"supplies":7}}. Ids are free-form but must not contain "."; values must be finite numbers. Counters set per leaf, so ids you do not name keep their values and a counter cannot be removed by omitting it. Every value is read back after writing and success is refused if it did not take.',
             },
           },
           required: ['journalId', 'pageId'],
@@ -277,6 +282,7 @@ export class SimpleQuestTools {
       text: z.string().optional(),
       system: z.record(z.unknown()).optional(),
       allowOrphanedObjectives: z.boolean().default(false),
+      flags: z.record(z.unknown()).optional(),
     });
 
     const request = schema.parse(args);
@@ -284,6 +290,7 @@ export class SimpleQuestTools {
     this.logger.info('Updating Simple Quest page', {
       pageId: request.pageId,
       fields: Object.keys(request.system ?? {}),
+      flagKeys: Object.keys(request.flags ?? {}),
       rewritingBody: request.text !== undefined,
     });
 

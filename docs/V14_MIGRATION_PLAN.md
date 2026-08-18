@@ -1877,6 +1877,68 @@ beyond Simple Quest (`pf2e-bestiary-tracking` also ships custom page subtypes).
       type guard cover the previously unreachable case. Gate: away-and-back on a journal whose
       first page is **not** a text page.
 
+##### 7b.0 gate result — 10/10 + UI confirmed, 2026-08-18 (flags foundation, **no new tools**, stays 56)
+
+Driven through the control port against a throwaway fixture the gate created itself
+(`tbMwT82Mb8s9EJ7r`, "MCP Gate 7b.0 (safe to delete)", folder `Quests`) — no Simple Quest demo
+content and no module journal was touched.
+
+| #   | Check                                                    | Result                                                      |
+| --- | -------------------------------------------------------- | ----------------------------------------------------------- |
+| 1   | Counter write lands, verified by read-back               | `changedFlags={"counters.gateA":{"to":3}}`, `flagsVerified` |
+| 2   | **Away and back**: 3 → 7, then 7 → 3                     | `{from:3,to:7}` then `{from:7,to:3}`                        |
+| 3   | Per-leaf write leaves a sibling counter intact           | `gateB` → 5; re-setting `gateA`=3 reported `changed={}`     |
+| 4   | Unknown flag key refused **and nothing written**         | `rejected=["bogusKey"]`, `gateA` still 3                    |
+| 5   | Dotted counter id refused                                | `rejected=["counters.a.b"]`                                 |
+| 6   | Non-numeric counter value refused                        | `rejected=["counters.gateC"]`                               |
+| 7   | Foundry `-=` unset syntax refused                        | `rejected=["-=counters"]`                                   |
+| 8   | `counters` given a scalar refused                        | "expected an object of id to number, got number"            |
+| 9   | **Branch not otherwise taken:** flags-only call succeeds | `counters.gateD` → 2, no name/text/system in the call       |
+| 10  | Flags and `system` apply together in one call            | `gateA` 3 → 9 **and** `difficulty` → "Severe"               |
+
+**Check 2 is the one that can fail.** A writer that ignored its input entirely passes the first half
+and fails the second; setting a value to what it already holds is indistinguishable from the write
+being dropped. **Check 4 asserts the sibling after the refusal**, so "refused" has to mean nothing
+was written rather than merely returning an unhappy response — 0b's rule, carried forward.
+
+Check 3's evidence is the **empty** change set: re-setting `gateA` to 3 reported no change, which is
+what proves the `gateB` write did not clobber it.
+
+**UI confirmation.** The gate proves the flag _stores_; both our writer and Simple Quest read
+`getFlag('simple-quest','counters')`, so a read-back through our own path is partly self-confirming.
+Enrichers were therefore written into the fixture body and rendered in Foundry: `@COUNT[gateA]{10}`
+→ **(9 / 10)**, `@REPUTATION[gateB]{0,5}` → **5 of 5 pips** on the default red→green gradient,
+`@COUNT[gateD]{4}` → **(2 / 4)**. `gateD` is the telling one — it was written by the flags-only call
+in check 9, so the widened branch works in Simple Quest's renderer and not merely in our response.
+`DIFFICULTY / Severe` rendered alongside, confirming check 10's two writes coexist.
+
+##### What 7b.0 shipped
+
+`validateSimpleQuestFlags` + `applySimpleQuestFlags` in `data-access.ts`, and a `flags` parameter on
+`update-simple-quest-page` so the cycle is gateable end-to-end. Three design points worth keeping:
+
+- **Validate and apply are separate methods.** All validation runs before the first `update()`, which
+  is the only way "refused" can mean "nothing was written".
+- **One dotted path per leaf, never a whole object.** `counters` is a plain object and Foundry
+  _merges_ those on update — the exact shape behind 7a.5's false success. `flags.simple-quest.counters.gold`
+  makes the write mean what it says. Stated cost: a counter cannot be removed by omitting it.
+- **Read-back is mandatory and refuses the success claim.** If flags fail verification but a `system`
+  write in the same call succeeded, the response says so explicitly rather than reporting a clean
+  failure. A half-applied call is worse hidden than admitted.
+
+Validation catches four silent failures: unknown keys, **dotted counter ids** (they expand into a
+nested object, but `enrichers.js` reads `flag[id]` with the literal id, so the value would be
+permanently unreachable), non-numeric values (`main.js` L149 does arithmetic — a string renders
+`NaN`), and `-=` unset syntax.
+
+⚠️ **Carried debt: the JournalEntry branch is unexercised.** The writer is document-agnostic and
+handles a `JournalEntry` unchanged, but nothing calls it that way yet. The six journal keys
+(`timeScale`, `dynamicTimeScale`, `negativeAbb`, `positiveAbb`, `showMinus`, `content` — verified at
+`TimelineJournalConfig.js` L38-43 and `Timeline.js` L44-51/L163, defaults 10 / false / "BC" / "AC" /
+false / "always") were **deliberately not declared in code** during this cycle: a constant with no
+caller is dead weight, and adding a second way to write timeline config would duplicate the contract
+7b.3 owns. **7b.3 declares that key set, and its gate must cover the JournalEntry path.**
+
 ##### 0d gate result — 6/6, 2026-08-17 (journal-level reader/writer alignment) — **Phase 7a complete**
 
 | #   | Check                                                                | Result                       |
@@ -2466,34 +2528,52 @@ name, before trusting a result.
 - "The symbol still exists" is not "the behaviour still exists". Read the call site.
 - Confirm a module is installed before scheduling work against it. SQ **is** installed at 5.1.4.
 
-#### ▶️ START HERE NEXT SESSION (written 2026-08-17, end of Session 11)
+#### ▶️ START HERE NEXT SESSION (rewritten 2026-08-18, end of Session 12)
 
-**State:** Phase 7a is **complete** — 0a/0b/0c/0d plus five tools, all gate-passed, 51 → **56 tools**.
-`master` and `origin/master` are level. Nothing is half-built and nothing is blocked on a decision.
+**State:** Phase 7a complete, and **7b.0 is done** — gate 10/10 + UI confirmed. Still **56 tools**:
+7b.0 adds none by design. `master` and `origin/master` are level. Nothing is half-built.
 
-**Next cycle: 7b.0 — the flags foundation**, the first cycle of the phase designed immediately below.
-No new tools; it is the write path that 7b.3 and 7b.4 both need. Namespace-scoped to
-`flags['simple-quest']` on both JournalEntry and JournalEntryPage, with each caller declaring its own
-allowed key set, because flags are schema-less and 0b's live-schema validation has no equivalent here.
+**Next cycle: 7b.1 — `get-timeline`**, the first cycle of 7b that moves the count (56 → 57). Read a
+timeline journal exactly as `Timeline._prepareContext` does, and — the point of the tool — list
+`orphanedEvents` explicitly with the reason each one is invisible. Pre-flight checks 1 and 2 are
+already settled from source (see **Pre-flight checks 1 and 2** below); their findings are what 7b.1
+and 7b.2 have to encode, in particular that **`eraEnd` is exclusive**, that **`||` at L84 makes
+`eraEnd: 0` behave like a missing end**, and that **era sizing (L68, inclusive) disagrees with event
+placement (L117, exclusive)** so the layout can reserve space for an event that never renders.
 
-**Before writing any of it, do these three things:**
+⚠️ **Debt from 7b.0 that 7b.3 must clear:** the flags writer is document-agnostic and handles a
+`JournalEntry` unchanged, but **nothing exercises that branch yet**. 7b.3 declares the six journal
+keys and its gate has to cover the JournalEntry path. Do not assume it works because the page path
+passed.
 
-1. **Re-read `Timeline.js` L114-159.** The phase is built around the orphaned-event trap and the
-   exclusive `eraEnd`; do not take this document's word for either.
-2. **Settle the `relativeTo: era` question** (L130) before 7b.4 is designed in detail. If a counter in
-   an event body really does write to the containing era's flags, `set-quest-counter`'s target is not
-   the page the text lives on, and that changes its signature.
-3. **Verify the assumption the phase leans on:** that `create-simple-quest-page` already writes
+**Before writing any of it, three things — 1 and 2 are now done:**
+
+1. ✅ **DONE 2026-08-17. Re-read `Timeline.js` L114-159.** Trap confirmed, all three documented claims
+   hold, and four further findings landed (the `||` vs `??` zero-year bug, two contradictory
+   containment rules in one file, silent overlap resolution, unmatchable zero-length eras). See
+   **Pre-flight checks 1 and 2** under 7b below.
+2. ✅ **DONE 2026-08-17. `relativeTo: era` settled — and it is a split brain, not just an era
+   redirect.** Timeline resolves counters against the **era**; the event's own sheet and search
+   resolve against the **event**; and the write follows the read via `dataset.uuid`. So an `@COUNT` in
+   an event body has **no single storage location**, and `set-quest-counter` must take an explicit
+   target and refuse to guess. Full evidence table under 7b.
+3. ⬜ **Still open — needs one live call.** Verify that `create-simple-quest-page` already writes
    `simple-quest.event` and `simple-quest.era` pages correctly. It should — the tool is generic over
-   type — but it is an inference from our own code, not an observation. One call settles it.
+   type — but it is an inference from our own code, not an observation.
 
 **Deploy state:** backend and module artifacts on disk match HEAD, verified by content rather than by
-hash (a stale bundle matched by hash and cost a gate this session). The running backend was started
+hash (a stale bundle matched by hash and cost a gate in Session 11). The running backend was started
 directly with `node backend.bundle.cjs`, not by Claude Desktop; a Claude Desktop restart will reuse
 it via the lock file.
 
-**Housekeeping carried over:** the `MCP Gate Fixture` and `MCP Gate 0d *` journals in the `Quests`
-folder are gate litter and can be deleted by name prefix. There is still **no journal-delete tool**,
+⚠️ **A Foundry socket reconnect is not a module reload.** After copying module `dist/`, the browser
+keeps running the old JavaScript and reconnects on the socket anyway, so the connection looks healthy
+while the new code is absent. Gating in that state produces a false result. **Refresh Foundry (F5)
+before any gate that touches module-side code.**
+
+**Housekeeping carried over:** `MCP Gate 7b.0 (safe to delete)` (`tbMwT82Mb8s9EJ7r`) in the `Quests`
+folder is gate litter and can be deleted by name prefix. Earlier `MCP Gate *` journals were already
+cleaned; Foundry logged the resulting orphaned pages as deleted on launch, which is benign. There is still **no journal-delete tool**,
 and adding one was declined on purpose — a permanently-resident destructive tool to serve a testing
 convenience is a bad trade.
 
@@ -2503,7 +2583,7 @@ sequencing, the journal-isolation rule, and the fact that enrichers exist at all
 
 ---
 
-#### 7b — Timeline & enrichers 🕰️ ⬜ **designed 2026-08-17, not started**
+#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 next**
 
 > **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
 > surface listed further down: **`event`/`era` timeline** (the campaign involves history and dated
@@ -2571,9 +2651,67 @@ What is genuinely missing is narrower: **flags cannot be written** (timeline con
 both live in flags), **nothing detects the orphaned-event trap**, and **nothing can read the timeline
 as rendered**.
 
+##### ✅ Pre-flight checks 1 and 2 — done 2026-08-17, read from installed SQ 5.1.4
+
+Checks 1 and 2 of the START HERE block are **settled from source**. Check 3 (does
+`create-simple-quest-page` write `event`/`era` pages) still needs one live call and is unrun.
+
+**Check 1 — the trap is real and the plan's three claims all hold.** `Timeline.js` L117-118 is
+`eras.find((e) => year >= e.system.eraStart && year < e.system.eraEnd)` then a bare `continue`;
+`eraEnd` is exclusive; and L84's `eraEnd || nextEra?.system.eraStart` is a **local for the end label
+only**, while matching at L117 reads raw `e.system.eraEnd` — so an era with no end renders a sensible
+label and matches nothing. Four things the earlier design pass did not catch:
+
+- **L84 uses `||`, not `??`, so `eraEnd: 0` is falsy too.** A legitimate era ending at year zero
+  behaves exactly like a missing one, and `year < 0` then excludes every positive year. SQ's default
+  abbreviations are `"BC"`/`"AC"`, so the module actively invites the one value that breaks it. Any
+  validation must treat `0` as present, which means `?? `-style checks, not truthiness.
+- **The file contains two different containment rules.** Era _sizing_ at L68 counts events with
+  `year >= eraStart && year <= eraEnd` (**inclusive**); event _placement_ at L117 uses `<`
+  (**exclusive**). A boundary-dated event therefore inflates `eraEventsCount` — and so that era's
+  height under `dynamicTimeScale` (L71) — while being dropped at L118. **The layout reserves space
+  for an event that never renders.** The guard must follow L117, because L117 is what decides
+  visibility; L68 explains why the timeline may look like room was made for something invisible.
+- **Overlapping eras resolve silently to the earliest.** L117 is a `.find()` over eras sorted by
+  `eraStart` (L61), so an event inside an overlap belongs to the first match only, with no warning.
+- **A zero-length era (`eraStart === eraEnd`) can never match any event** — L117 is unsatisfiable —
+  and gets 0 px under static scaling (L69/L73). Invisible, and it swallows nothing. A 7b.3
+  validation target.
+
+**Check 2 — `relativeTo: era` confirmed, and it is worse than "counters write to the era": it is a
+split brain.** The timeline is only one of three views, and they disagree:
+
+| View                     | Call site                        | `relativeTo` | Counter resolves against |
+| ------------------------ | -------------------------------- | ------------ | ------------------------ |
+| **Timeline**             | `Timeline.js` L130               | `era`        | **the era page**         |
+| Event's own page sheet   | `JournalPageHelpers.js` L151-155 | `this.page`  | **the event page**       |
+| Search preview           | `Search.js` L155                 | `p`          | **the event page**       |
+| Era body inside timeline | `Timeline.js` L106               | `era`        | the era page             |
+
+**And the write follows the read.** The enrichers stamp `dataset.uuid = content.relativeTo.uuid`
+(`enrichers.js` L132 for `@COUNT`, L164 for `@REPUTATION`), and `main.js` L142-151 writes to
+`fromUuidSync(e.target.dataset.uuid).setFlag(MODULE_ID, "counters", …)`. So clicking the _same_
+counter in the timeline versus on the event's own sheet increments **two different flags on two
+different documents**, and neither view can see the other's value.
+
+Consequences that bind 7b.4's design:
+
+1. **`@COUNT` in an `event` body has no single well-defined storage location.** "Target the page the
+   text lives on" and "target the containing era" are each wrong in at least one view, so the tool
+   cannot infer a target — it must take an **explicit** one.
+2. **Era-scoped collision.** In timeline view every event in an era shares that era's single
+   `counters` object, so two events both using `@COUNT[gold]{10}` are one counter there and two
+   counters on their own sheets.
+3. So the tool must **refuse to guess**, and must say so when the target is an `event` page. This is
+   the house failure mode with two answers instead of none — a silent default here would be
+   indistinguishable from a correct write.
+4. **Recommended placement rule for 7z:** counters belong in single-view page bodies
+   (`quest` / `lore` / `faction`), **not** in `event` bodies. 7b.2's guard and the GM doc should both
+   say this.
+
 ##### Cycles
 
-**7b.0 — Flags foundation (no new tools).** A write path for `flags['simple-quest']` on both
+**7b.0 — Flags foundation (no new tools). ✅ DONE, gate passed 10/10 + UI confirmed 2026-08-18.** A write path for `flags['simple-quest']` on both
 JournalEntry and JournalEntryPage. Namespace-scoped: refuse any flag scope other than
 `simple-quest`, so this never becomes a general-purpose flag poker. Flags are schema-less, so 0b's
 live-schema validation has no equivalent — instead each _caller_ declares its own allowed key set,

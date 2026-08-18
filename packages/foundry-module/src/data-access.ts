@@ -1653,6 +1653,36 @@ const SRC_BACKED_PAGE_TYPES = new Set(['image', 'video', 'pdf']);
 /** The only Simple Quest subtype that carries objectives. */
 const SIMPLE_QUEST_QUEST_TYPE = 'simple-quest.quest';
 
+/**
+ * The only flag scope this module ever writes. Deliberately a constant and never a
+ * parameter: a scope argument would turn the flags foundation into a general-purpose flag
+ * poker able to reach `core`, another module, or the system.
+ */
+const SIMPLE_QUEST_FLAG_SCOPE = 'simple-quest';
+
+/*
+ * Timeline axis configuration lives on the **JournalEntry** (six keys: timeScale,
+ * dynamicTimeScale, negativeAbb, positiveAbb, showMinus, content — see the 7b.3 section of
+ * V14_MIGRATION_PLAN.md for the verified source lines). The writer below is document-
+ * agnostic and already handles a JournalEntry, but the journal key set is declared by
+ * `set-timeline-config` in 7b.3 rather than here, so that each caller owns its own list.
+ */
+
+/**
+ * Counter and reputation state, stored on the **JournalEntryPage**.
+ * `enrichers.js` L128 (`@COUNT`) and L159 (`@REPUTATION`) read it; `main.js` L146-151
+ * writes it on click. It is the only page-level Simple Quest flag that is ours to write —
+ * `simpleQuestDir` lives on Folders and `timeline` is a migration leftover.
+ */
+const SIMPLE_QUEST_PAGE_FLAG_KEYS = ['counters'] as const;
+
+/**
+ * Flag keys whose value is a free-form id → value map rather than a scalar. Their **keys**
+ * cannot be validated against a list because counter ids are arbitrary by design (whatever
+ * the GM typed inside `@COUNT[...]`), so the shape is validated instead.
+ */
+const SIMPLE_QUEST_OBJECT_FLAG_KEYS: ReadonlySet<string> = new Set(['counters']);
+
 /** One `<li>` in a Simple Quest quest page body, in document order. */
 interface ObjectiveEntry {
   index: number;
@@ -4425,6 +4455,7 @@ export class FoundryDataAccess {
     text?: string | undefined;
     system?: Record<string, unknown> | undefined;
     allowOrphanedObjectives?: boolean | undefined;
+    flags?: Record<string, unknown> | undefined;
   }): Promise<Record<string, unknown>> {
     this.validateFoundryState();
 
@@ -4508,6 +4539,24 @@ export class FoundryDataAccess {
       };
     }
 
+    // Guard 5 — Simple Quest page flags. Validated here, before the first write, so a
+    // refusal provably leaves the page untouched rather than half-updated.
+    const flagCheck = this.validateSimpleQuestFlags(
+      request.flags,
+      SIMPLE_QUEST_PAGE_FLAG_KEYS,
+      'page'
+    );
+    if (!flagCheck.valid) {
+      return {
+        success: false,
+        refused: true,
+        reason: 'unknown-flag-keys',
+        rejected: flagCheck.rejected,
+        accepted: flagCheck.accepted,
+        message: flagCheck.message,
+      };
+    }
+
     try {
       // Guard 4 — would this body rewrite strand stored objective state?
       let orphanWarning: Record<string, unknown> | undefined;
@@ -4571,14 +4620,42 @@ export class FoundryDataAccess {
       // let an ObjectField inside it replace rather than merge.
       for (const [key, value] of Object.entries(system)) update[`system.${key}`] = value;
 
-      if (Object.keys(update).length === 0) {
+      const requestedFlags = request.flags ?? {};
+      const hasFlags = Object.keys(requestedFlags).length > 0;
+
+      if (Object.keys(update).length === 0 && !hasFlags) {
         return {
           success: false,
-          message: 'Nothing to update: provide at least one of name, text, or system.',
+          message: 'Nothing to update: provide at least one of name, text, system, or flags.',
         };
       }
 
-      await page.update(update);
+      if (Object.keys(update).length > 0) await page.update(update);
+
+      const flagResult = hasFlags
+        ? await this.applySimpleQuestFlags(page, requestedFlags)
+        : undefined;
+
+      // A flag that did not read back is the 7a.5 failure mode exactly: the call returned,
+      // so nothing looks wrong. Refuse the success claim, and say plainly that the
+      // non-flag part of the same call did land, because it did.
+      if (flagResult && !flagResult.ok) {
+        this.auditLog('updateSimpleQuestPage', request, 'failure', 'flag-write-not-verified');
+        return {
+          success: false,
+          reason: 'flag-write-not-verified',
+          pageId: page.id,
+          pageName: page.name,
+          journalId: journal.id,
+          unverifiedFlags: flagResult.unverified,
+          changedFlags: flagResult.changed,
+          message:
+            `${flagResult.unverified.length} flag value(s) did not read back as written and ` +
+            `the write cannot be reported as successful: ` +
+            `${flagResult.unverified.map(u => u.path).join(', ')}. ` +
+            `Any name, text or system changes in this same call DID apply.`,
+        };
+      }
 
       const after: Record<string, unknown> =
         typeof page.system?.toObject === 'function' ? page.system.toObject() : {};
@@ -4602,6 +4679,7 @@ export class FoundryDataAccess {
         journalId: journal.id,
         changedSystemFields: changed,
         unchangedSystemFields: Object.keys(after).filter(k => !(k in changed)),
+        ...(flagResult ? { changedFlags: flagResult.changed, flagsVerified: true } : {}),
         ...(page.type === SIMPLE_QUEST_QUEST_TYPE
           ? { objectives: await this.parseQuestObjectives(page) }
           : {}),
@@ -5247,6 +5325,193 @@ export class FoundryDataAccess {
    * The rejection list is the documentation. A wrong guess costs one round trip and teaches
    * the real field names, instead of costing tokens in every session's tool list.
    */
+  /**
+   * Validate a `flags['simple-quest']` write before anything is written.
+   *
+   * Split from {@link applySimpleQuestFlags} on purpose: 0b's gate established that a
+   * refusal has to mean *nothing was written*, not merely that the response looked unhappy,
+   * and that only holds if every check runs before the first `update()`.
+   *
+   * All-or-nothing. One bad key refuses the whole call, so a caller never has to reason
+   * about a partially applied flag write.
+   */
+  private validateSimpleQuestFlags(
+    flags: Record<string, unknown> | undefined,
+    allowedKeys: readonly string[],
+    documentLabel: string
+  ): { valid: boolean; accepted: string[]; rejected: string[]; message?: string } {
+    if (!flags || Object.keys(flags).length === 0) {
+      return { valid: true, accepted: [], rejected: [] };
+    }
+
+    const accepted: string[] = [];
+    const rejected: string[] = [];
+    const reasons: string[] = [];
+
+    for (const [key, value] of Object.entries(flags)) {
+      if (key.startsWith('-=')) {
+        rejected.push(key);
+        reasons.push(
+          `${key}: Foundry's "-=" unset syntax removes a flag rather than merging it. ` +
+            `This writer only merges.`
+        );
+        continue;
+      }
+
+      // A dotted key would let a caller hand-build a path and land outside the validated
+      // key set once Foundry expands it.
+      if (key.includes('.')) {
+        rejected.push(key);
+        reasons.push(`${key}: dotted keys are not accepted; pass the top-level flag key only.`);
+        continue;
+      }
+
+      if (!allowedKeys.includes(key)) {
+        rejected.push(key);
+        reasons.push(`${key}: not a Simple Quest flag this writer manages on a ${documentLabel}.`);
+        continue;
+      }
+
+      if (SIMPLE_QUEST_OBJECT_FLAG_KEYS.has(key)) {
+        const isPlainObj = value !== null && typeof value === 'object' && !Array.isArray(value);
+        if (!isPlainObj) {
+          rejected.push(key);
+          reasons.push(
+            `${key}: expected an object of id to number, got ` +
+              `${Array.isArray(value) ? 'an array' : typeof value}.`
+          );
+          continue;
+        }
+
+        let subOk = true;
+        for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
+          // Ids are arbitrary by design — whatever the GM typed inside `@COUNT[...]` — so
+          // they are not checked against a list. But a dot would expand into a nested
+          // object instead of a literal key, and Simple Quest reads `flag[id]` with the
+          // literal id, so the value it looked for would never be found.
+          if (subKey.includes('.')) {
+            rejected.push(`${key}.${subKey}`);
+            reasons.push(
+              `${key}.${subKey}: a counter id containing "." expands into a nested object, ` +
+                `but Simple Quest reads the counters flag with the literal id, so the value ` +
+                `would be unreachable.`
+            );
+            subOk = false;
+            continue;
+          }
+          if (subKey.startsWith('-=')) {
+            rejected.push(`${key}.${subKey}`);
+            reasons.push(`${key}.${subKey}: "-=" unset syntax is not accepted here.`);
+            subOk = false;
+            continue;
+          }
+          if (typeof subValue !== 'number' || !Number.isFinite(subValue)) {
+            rejected.push(`${key}.${subKey}`);
+            reasons.push(
+              `${key}.${subKey}: counter values must be finite numbers — Simple Quest does ` +
+                `arithmetic on them (main.js L149), so a non-number renders as NaN.`
+            );
+            subOk = false;
+          }
+        }
+        if (subOk) accepted.push(key);
+        continue;
+      }
+
+      // Everything else is a scalar. Handing an object to a scalar flag would merge into
+      // it rather than replace it, which is the failure this project has shipped before.
+      if (value !== null && typeof value === 'object') {
+        rejected.push(key);
+        reasons.push(`${key}: expected a scalar (string, number or boolean), got an object.`);
+        continue;
+      }
+
+      accepted.push(key);
+    }
+
+    if (rejected.length === 0) return { valid: true, accepted, rejected };
+
+    return {
+      valid: false,
+      accepted,
+      rejected,
+      message:
+        `${rejected.length} flag key(s) refused, so nothing was written. ` +
+        `${reasons.join(' ')} ` +
+        `Simple Quest flags this writer manages on a ${documentLabel}: ` +
+        `${[...allowedKeys].sort().join(', ')}.`,
+    };
+  }
+
+  /**
+   * Apply a validated `flags['simple-quest']` write, then **read it back and prove it took**.
+   *
+   * The read-back is not defensive padding. 7a.5 shipped a tool that reported success for a
+   * write Foundry had silently discarded, and the rule that came out of it is that anything
+   * changing what players see must re-read the field rather than trust that the call
+   * returned.
+   *
+   * Writes one **dotted path per leaf** rather than handing over whole objects. `counters` is
+   * a plain object, and Foundry merges those on update, so writing `{gold: 5}` over
+   * `{gold: 3, silver: 7}` yields `{gold: 5, silver: 7}` — right for setting one counter,
+   * but it means a key cannot be removed by omitting it. Per-leaf paths make the write mean
+   * exactly what it says, and make the read-back exact.
+   */
+  private async applySimpleQuestFlags(
+    doc: any,
+    flags: Record<string, unknown>
+  ): Promise<{
+    ok: boolean;
+    changed: Record<string, { from: unknown; to: unknown }>;
+    unverified: Array<{ path: string; expected: unknown; actual: unknown }>;
+  }> {
+    const readLeaf = (flagKey: string, subKey?: string): unknown => {
+      const held = doc.getFlag(SIMPLE_QUEST_FLAG_SCOPE, flagKey);
+      if (subKey === undefined) return held;
+      return held?.[subKey];
+    };
+
+    const leaves: Array<{ path: string; flagKey: string; subKey?: string; value: unknown }> = [];
+    for (const [key, value] of Object.entries(flags)) {
+      if (SIMPLE_QUEST_OBJECT_FLAG_KEYS.has(key)) {
+        for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
+          leaves.push({ path: `${key}.${subKey}`, flagKey: key, subKey, value: subValue });
+        }
+      } else {
+        leaves.push({ path: key, flagKey: key, value });
+      }
+    }
+
+    if (leaves.length === 0) return { ok: true, changed: {}, unverified: [] };
+
+    const before = new Map<string, unknown>();
+    const update: Record<string, unknown> = {};
+    for (const leaf of leaves) {
+      before.set(leaf.path, readLeaf(leaf.flagKey, leaf.subKey));
+      const suffix = leaf.subKey === undefined ? leaf.flagKey : `${leaf.flagKey}.${leaf.subKey}`;
+      update[`flags.${SIMPLE_QUEST_FLAG_SCOPE}.${suffix}`] = leaf.value;
+    }
+
+    await doc.update(update);
+
+    const changed: Record<string, { from: unknown; to: unknown }> = {};
+    const unverified: Array<{ path: string; expected: unknown; actual: unknown }> = [];
+
+    for (const leaf of leaves) {
+      const actual = readLeaf(leaf.flagKey, leaf.subKey);
+      if (JSON.stringify(actual) !== JSON.stringify(leaf.value)) {
+        unverified.push({ path: leaf.path, expected: leaf.value, actual });
+        continue;
+      }
+      const from = before.get(leaf.path);
+      if (JSON.stringify(from) !== JSON.stringify(actual)) {
+        changed[leaf.path] = { from, to: actual };
+      }
+    }
+
+    return { ok: unverified.length === 0, changed, unverified };
+  }
+
   private validateSystemData(
     type: string,
     system: Record<string, unknown> | undefined
