@@ -2528,18 +2528,33 @@ name, before trusting a result.
 - "The symbol still exists" is not "the behaviour still exists". Read the call site.
 - Confirm a module is installed before scheduling work against it. SQ **is** installed at 5.1.4.
 
-#### ▶️ START HERE NEXT SESSION (rewritten 2026-08-18, end of Session 12)
+#### ▶️ START HERE NEXT SESSION (updated 2026-08-21, end of Session 14)
 
-**State:** Phase 7a complete, and **7b.0 is done** — gate 10/10 + UI confirmed. Still **56 tools**:
-7b.0 adds none by design. `master` and `origin/master` are level. Nothing is half-built.
+**State:** Phase 7a complete, **7b.0 done** (gate 10/10 + UI confirmed), and **all three pre-flight
+checks for 7b.1 are now closed** — check 3 ran live on 2026-08-21. Still **56 tools**: 7b.0 and the
+pre-flights add none. Nothing is half-built. `master` is **1 commit ahead of `origin/master`**
+(`6d2f490`, docs only) plus this session's plan update.
 
 **Next cycle: 7b.1 — `get-timeline`**, the first cycle of 7b that moves the count (56 → 57). Read a
 timeline journal exactly as `Timeline._prepareContext` does, and — the point of the tool — list
 `orphanedEvents` explicitly with the reason each one is invisible. Pre-flight checks 1 and 2 are
-already settled from source (see **Pre-flight checks 1 and 2** below); their findings are what 7b.1
-and 7b.2 have to encode, in particular that **`eraEnd` is exclusive**, that **`||` at L84 makes
-`eraEnd: 0` behave like a missing end**, and that **era sizing (L68, inclusive) disagrees with event
-placement (L117, exclusive)** so the layout can reserve space for an event that never renders.
+already settled from source, and **check 3 is settled live** (see the three pre-flight sections
+below). Their findings are what 7b.1 and 7b.2 have to encode, in particular that **`eraEnd` is
+exclusive**, that **`||` at L84 makes `eraEnd: 0` behave like a missing end**, and that **era sizing
+(L68, inclusive) disagrees with event placement (L117, exclusive)** so the layout can reserve space
+for an event that never renders.
+
+Check 3 added the concrete storage shapes, so 7b.1 can be written against observed values rather than
+assumed ones: **omitted `eraEnd` stores as `null` with the key present** (so the test is `== null`,
+not `!eraEnd` and not `in`), **`eraEnd: 0` stores as `0`**, and **a yearless event stores `year: null`
+and is silently placed in whatever era spans zero**, because `null >= 0` is `true` in JS. Test
+`year == null` _before_ the containment expression. That last one is derived from `Timeline.js` L117
+plus JS semantics, **not yet observed rendering** — the pre-flight fixture has no era spanning zero,
+so 7b.1's gate must build one.
+
+⚠️ **7b.2 grew a second job.** Pre-flight 3 found that a bad `system` value is reported as success:
+`year: "abc"` returns `success: true` with an empty change set, and `year: 1.5` silently stores `2`.
+The requested-vs-stored check now ships with 7b.2. Details under **The one failure** below.
 
 ⚠️ **Debt from 7b.0 that 7b.3 must clear:** the flags writer is document-agnostic and handles a
 `JournalEntry` unchanged, but **nothing exercises that branch yet**. 7b.3 declares the six journal
@@ -2557,9 +2572,11 @@ passed.
    resolve against the **event**; and the write follows the read via `dataset.uuid`. So an `@COUNT` in
    an event body has **no single storage location**, and `set-quest-counter` must take an explicit
    target and refuse to guess. Full evidence table under 7b.
-3. ⬜ **Still open — needs one live call.** Verify that `create-simple-quest-page` already writes
-   `simple-quest.event` and `simple-quest.era` pages correctly. It should — the tool is generic over
-   type — but it is an inference from our own code, not an observation.
+3. ✅ **DONE 2026-08-21. `create-simple-quest-page` writes `event` and `era` pages correctly — 8/9,
+   and the one failure is not type-specific.** The inference held: the quest-only branches really are
+   gated on `SIMPLE_QUEST_QUEST_TYPE`, and live-model validation reaches both models. It also settled
+   the four stored shapes 7b.1's orphan rule depends on, and turned up a **silent numeric coercion
+   that reports success**. See **Pre-flight check 3** under 7b below.
 
 **Deploy state:** backend and module artifacts on disk match HEAD, verified by content rather than by
 hash (a stale bundle matched by hash and cost a gate in Session 11). The running backend was started
@@ -2571,7 +2588,13 @@ keeps running the old JavaScript and reconnects on the socket anyway, so the con
 while the new code is absent. Gating in that state produces a false result. **Refresh Foundry (F5)
 before any gate that touches module-side code.**
 
-**Housekeeping carried over:** `MCP Gate 7b.0 (safe to delete)` (`tbMwT82Mb8s9EJ7r`) in the `Quests`
+**Housekeeping — two fixtures now.** `MCP Gate 7b1pre (safe to delete)` (`eFqBp8QXhPEGG32C`), 6 pages,
+sits in the **`Timeline`** special folder, so Simple Quest may render it as a second timeline in the
+UI. Contents: eras `100–200`, `−100–0` and `300`-with-`null`-end; events at `year 150` and two at
+`year: null`. Worth keeping as a 7b.1 starting fixture, but **it is not sufficient on its own** — it
+has no event on an `eraEnd` boundary, none on an `eraStart`, none dated outside every era, and no era
+that actually spans zero. 7b.1's gate must add those four. And
+`MCP Gate 7b.0 (safe to delete)` (`tbMwT82Mb8s9EJ7r`) in the `Quests`
 folder is gate litter and can be deleted by name prefix. Earlier `MCP Gate *` journals were already
 cleaned; Foundry logged the resulting orphaned pages as deleted on launch, which is benign. There is still **no journal-delete tool**,
 and adding one was declined on purpose — a permanently-resident destructive tool to serve a testing
@@ -2653,8 +2676,8 @@ as rendered**.
 
 ##### ✅ Pre-flight checks 1 and 2 — done 2026-08-17, read from installed SQ 5.1.4
 
-Checks 1 and 2 of the START HERE block are **settled from source**. Check 3 (does
-`create-simple-quest-page` write `event`/`era` pages) still needs one live call and is unrun.
+Checks 1 and 2 of the START HERE block are **settled from source**. Check 3 is **done live on
+2026-08-21** and is written up after them.
 
 **Check 1 — the trap is real and the plan's three claims all hold.** `Timeline.js` L117-118 is
 `eras.find((e) => year >= e.system.eraStart && year < e.system.eraEnd)` then a bare `continue`;
@@ -2709,6 +2732,81 @@ Consequences that bind 7b.4's design:
    (`quest` / `lore` / `faction`), **not** in `event` bodies. 7b.2's guard and the GM doc should both
    say this.
 
+##### ✅ Pre-flight check 3 — done live 2026-08-21 (Session 14), 8/9
+
+Driven through the control port against the live pf2e world. Fixture: a throwaway journal in the
+`Timeline` folder, read back with `list-journals {journalId, pageId}` (whose page payload nests under
+`.page` and carries `system` via `toObject()`) — **never** from the write tool's own echo.
+
+**The inference held.** `create-simple-quest-page` is genuinely generic over type:
+
+- Both `simple-quest.era` and `simple-quest.event` create with the requested type, confirmed from the
+  stored document rather than the request.
+- **Quest-only prep defaults do not leak.** An era page gets no `status`, and neither type gets the
+  objective-secrets second pass. The `request.type === SIMPLE_QUEST_QUEST_TYPE` gate is doing real
+  work; a `startsWith('simple-quest.')` there would have stamped `status: -1` onto models with no
+  such field.
+- **Live-model validation reaches the era model.** `{bogusEraKey: 7}` was refused by name, and the
+  refusal was checked against the journal's page list — the page really was never created, rather
+  than the tool merely claiming so.
+- The live export (`simple-quest.api.exportAllSchemas`) matches the installed `JournalPageEra.js` /
+  `JournalPageEvent.js` field-for-field, plus the inherited `src`. Neither model has a `hideInConfig`
+  field, so the 7a `objectiveState` omission trap does not bite this phase.
+
+**The four stored shapes 7b.1's orphan rule turns on** — all now observed, not assumed:
+
+| Written                | Stored                        | Why 7b.1 cares                                                                                                                        |
+| ---------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `eraEnd: 0`            | `0` (number)                  | Distinguishable from missing. SQ's own L84 `\|\|` cannot tell these apart; our reader must.                                           |
+| `eraEnd` omitted       | key **present**, value `null` | So the "no end" test is `eraEnd == null` — **not** `!eraEnd` (0 is falsy) and **not** `'eraEnd' in system` (the key is always there). |
+| `eraStart: -100`       | `-100`                        | BC-style years round-trip, which SQ's `"BC"`/`"AC"` defaults invite.                                                                  |
+| event with no `system` | `year: null`, **success**     | **Yearless events exist and are createable.**                                                                                         |
+
+⚠️ **New finding — a yearless event is not orphaned, it lands in whatever era spans zero.**
+`Timeline.js` L117 is `year >= e.system.eraStart && year < e.system.eraEnd`, and in JS relational
+comparison `null` converts to `0`: `null >= 0` is `true` and `null < 200` is `true`. So an event with
+`year: null` **matches an era spanning 0..200** and renders there, in Simple Quest itself. 7b.1 must
+test `year == null` **before** the containment expression, or it will faithfully reproduce the
+module's own mis-placement and report it as correctly contained.
+
+**Derived from source and JS semantics, not yet seen on screen** — the pre-flight fixture's zero-side
+era is `−100–0`, and `0` is an _exclusive_ end, so its two yearless events orphan rather than land.
+7b.1's gate has to build an era that genuinely spans zero (say `0–50`) and confirm the placement in
+the rendered timeline. Recording it as derived, because a claim that has not been watched fail is not
+yet evidence.
+
+##### ⚠️ The one failure — silent numeric coercion reported as success (not event/era specific)
+
+`year: 1.5` was stored as `2` and the call returned `success: true`. Root cause is core, confirmed in
+`common/data/fields.mjs`: `NumberField._cleanType` does `if (this.integer) value = Math.round(value)`
+**before** `_validateType` ever runs, so its `"must be an integer"` branch is unreachable for any
+finite non-integer. Observed across the update path:
+
+| Sent        | Stored               | Reported                                              |
+| ----------- | -------------------- | ----------------------------------------------------- |
+| `7.5`       | `8`                  | `{from: 2, to: 8}`                                    |
+| `10.4`      | `10`                 | `{from: 100, to: 10}`                                 |
+| `"42"`      | `42`                 | `{from: 8, to: 42}`                                   |
+| `true`      | `1`                  | `{from: 42, to: 1}`                                   |
+| `null`      | `null`               | `{from: 1, to: null}` (clears the field — legitimate) |
+| **`"abc"`** | **unchanged (`42`)** | **`success: true`, `changedSystemFields: {}`**        |
+
+`changedSystemFields` is honest about what _landed_ — it diffs `before` vs `after` on the document,
+so it shows `8`, never the `7.5` that was asked for. The gap is that **nothing compares _requested_
+against _stored_**. That makes the last row a **false success**: `"abc"` is cast to `NaN`, Foundry
+discards the field, and the response is byte-for-byte identical to "the value was already 42."
+
+**This is the house failure mode, and the fix already exists one branch over.** `applySimpleQuestFlags`
+does exactly this verification — reads back, and on divergence returns `success: false` with
+`reason: 'flag-write-not-verified'` and an `unverifiedFlags` list. The system-field path never got the
+symmetric check. Fix shape: after `page.update(update)`, compare each requested `system.<key>` against
+`after[key]`; emit `coercedSystemFields` and refuse the success claim when a requested value did not
+land.
+
+**Scheduled into 7b.2**, which already reworks the create/update response. Not 7b.1 — that cycle is
+read-only. Applies to `create-simple-quest-page` too (that is where `1.5 → 2` was first seen) and to
+every page type, quest included; it is not a timeline bug.
+
 ##### Cycles
 
 **7b.0 — Flags foundation (no new tools). ✅ DONE, gate passed 10/10 + UI confirmed 2026-08-18.** A write path for `flags['simple-quest']` on both
@@ -2725,10 +2823,20 @@ sorted by `eraStart`, events sorted by `year`, each event resolved to its contai
 trap visible. Also returns the journal's axis flags and each page's `uuid`, which is what
 cross-link emission needs.
 
-**7b.2 — Containment guard on create/update.** When an `event` is written, report whether it lands
-in an era. **Warn, do not refuse:** writing events before their eras exist is a legitimate prep
-order, so a refusal would fight the workflow. But the response must say so plainly, and
-`get-timeline` must list it. Same for an `era` written with a null `eraEnd`.
+**7b.2 — Containment guard on create/update, plus the coercion check.** Two things, because both
+change the same response object:
+
+1. **Containment.** When an `event` is written, report whether it lands in an era. **Warn, do not
+   refuse:** writing events before their eras exist is a legitimate prep order, so a refusal would
+   fight the workflow. But the response must say so plainly, and `get-timeline` must list it. Same
+   for an `era` written with a null `eraEnd`, and for a **yearless** event (`year: null`), which
+   pre-flight 3 showed is not orphaned at all but silently lands in whatever era spans zero.
+2. **Requested-vs-stored verification** (added 2026-08-21 from pre-flight 3). Compare each requested
+   `system.<key>` against what the document holds after the write; emit `coercedSystemFields` and
+   **refuse the success claim** when a requested value did not land. Today `year: "abc"` returns
+   `success: true` with an empty change set, and `year: 1.5` silently becomes `2`. Mirror
+   `applySimpleQuestFlags`, which already does exactly this for flags. Applies to
+   `create-simple-quest-page` as well, and to every page type — it is not a timeline bug.
 
 **7b.3 — `set-timeline-config`.** The six journal flags. Numbers validated (`timeScale > 0`),
 `content` constrained to its three choices.
@@ -2753,6 +2861,9 @@ link, a visible embarrassment — so until then the tools should treat `@time` a
 | 1     | **Boundary:** an event dated exactly on an era's `eraEnd` must be reported orphaned (exclusive bound), while one dated on `eraStart` must not. A fixture where both eras are adjacent distinguishes the off-by-one; one with a gap does not.                         |
 | 1     | Assert `get-timeline`'s era order and event-to-era mapping match what the module renders, not what the numbers suggest — eras stack contiguously, so a gap in years is not a gap on screen.                                                                          |
 | 2     | Create an event with no eras present at all: must succeed **and** warn. A refusal here fails the workflow, so the check is that it wrote and reported, not that it blocked.                                                                                          |
+| 2     | Write `year: "abc"` and assert the call **fails**. Today it returns `success: true` with `changedSystemFields: {}` — identical to a no-op write of the same value, which is why it needs a check that can tell them apart.                                           |
+| 2     | Write `year: 1.5` and assert the response says the stored value is `2` **and** flags it as coerced. Asserting only that `2` was stored passes on today's code, which already reports the landed value truthfully; the new information is the coercion notice.        |
+| 2     | Write a **yearless** event against a fixture whose eras span zero, and assert it is reported as yearless rather than as contained. `null >= 0` is `true` in JS, so a naive containment test reports it contained and the check silently passes on a wrong answer.    |
 | 3     | **Call with no arguments** and assert the flags are unchanged rather than reset to defaults — a config writer that helpfully fills in `timeScale: 10` would silently retune an existing timeline.                                                                    |
 | 3     | Away-and-back on `timeScale`, and confirm in the UI that the axis actually rescales. Reading the flag back proves storage, not effect.                                                                                                                               |
 | 4     | Write a counter, then read it back **through the rendered page**, not just the flag — and settle whether an event-body counter lands on the event or its era. If it lands on the era, that is the finding, not a bug in our tool.                                    |
