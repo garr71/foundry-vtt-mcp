@@ -2530,85 +2530,52 @@ name, before trusting a result.
 
 #### ▶️ START HERE NEXT SESSION (updated 2026-08-21, end of Session 14)
 
-**State:** Phase 7a complete, **7b.0 done** (gate 10/10 + UI confirmed), **all three pre-flight checks
-for 7b.1 closed**, and the **silent-coercion defect that check 3 turned up is fixed** (gate 11/11).
-Still **56 tools** — none of that adds one. Nothing is half-built. `master` is **1 commit ahead of `origin/master`**
-(`6d2f490`, docs only) plus this session's plan update.
+**State:** Phase 7a complete; **7b.0** done (10/10), the **silent-coercion defect** found in
+pre-flight 3 fixed (11/11), and **7b.1 `get-timeline` done** (15/15). **57 tools.** All three 7b.1
+pre-flights are closed. Nothing is half-built, and `master` is level with `origin/master` through
+`c114d43` (the 7b.1 commit follows it).
 
-**Next cycle: 7b.1 — `get-timeline`**, the first cycle of 7b that moves the count (56 → 57). Read a
-timeline journal exactly as `Timeline._prepareContext` does, and — the point of the tool — list
-`orphanedEvents` explicitly with the reason each one is invisible. Pre-flight checks 1 and 2 are
-already settled from source, and **check 3 is settled live** (see the three pre-flight sections
-below). Their findings are what 7b.1 and 7b.2 have to encode, in particular that **`eraEnd` is
-exclusive**, that **`||` at L84 makes `eraEnd: 0` behave like a missing end**, and that **era sizing
-(L68, inclusive) disagrees with event placement (L117, exclusive)** so the layout can reserve space
-for an event that never renders.
+**Next cycle: 7b.2 — the containment guard on create/update.** Its second half (requested-vs-stored
+value verification) already shipped on 2026-08-21, so what remains is the warning half: when an
+`event` is written, say whether it lands in an era. **Warn, do not refuse** — writing events before
+their eras exist is a legitimate prep order, so a refusal would fight the workflow. Same for an `era`
+written with a null `eraEnd`, and for a **yearless** event, which 7b.1 proved is not orphaned at all
+but silently dated to year 0 and placed in whatever era spans it.
 
-Check 3 added the concrete storage shapes, so 7b.1 can be written against observed values rather than
-assumed ones: **omitted `eraEnd` stores as `null` with the key present** (so the test is `== null`,
-not `!eraEnd` and not `in`), **`eraEnd: 0` stores as `0`**, and **a yearless event stores `year: null`
-and is silently placed in whatever era spans zero**, because `null >= 0` is `true` in JS. Test
-`year == null` _before_ the containment expression. That last one is derived from `Timeline.js` L117
-plus JS semantics, **not yet observed rendering** — the pre-flight fixture has no era spanning zero,
-so 7b.1's gate must build one.
-
-✅ **The coercion defect pre-flight 3 found is already fixed** (2026-08-21, gate 11/11, no new tool).
-`validateSystemData` now checks values as well as key names, before the first write, by asking the
-live `DataField` what it would store. Four tools got the fix at once. Details under **The one
-failure** below. **Foundry must be refreshed (F5) after any module deploy** — the gate's freshness
-probe caught a stale browser on its first run.
+`get-timeline` already computes every judgement 7b.2 needs to emit — containment, the orphan reason,
+and the layout warnings. **7b.2 should call into that logic, not restate it**, or the write path and
+the read path will drift on the next Simple Quest release.
 
 ⚠️ **Debt from 7b.0 that 7b.3 must clear:** the flags writer is document-agnostic and handles a
 `JournalEntry` unchanged, but **nothing exercises that branch yet**. 7b.3 declares the six journal
-keys and its gate has to cover the JournalEntry path. Do not assume it works because the page path
-passed.
+keys (`timeScale`, `dynamicTimeScale`, `negativeAbb`, `positiveAbb`, `showMinus`, `content` — read
+from `TimelineJournalConfig.js` and now surfaced by `get-timeline`) and its gate has to cover the
+JournalEntry path. Do not assume it works because the page path passed.
 
-**Before writing any of it, three things — 1 and 2 are now done:**
+**Deploy state:** backend and module artifacts on disk match HEAD, verified by content. The backend
+runs from `node backend.bundle.cjs` in the installed dist directory; a Claude Desktop restart reuses
+it via the lock file. Both stdio wrappers were redeployed together.
 
-1. ✅ **DONE 2026-08-17. Re-read `Timeline.js` L114-159.** Trap confirmed, all three documented claims
-   hold, and four further findings landed (the `||` vs `??` zero-year bug, two contradictory
-   containment rules in one file, silent overlap resolution, unmatchable zero-length eras). See
-   **Pre-flight checks 1 and 2** under 7b below.
-2. ✅ **DONE 2026-08-17. `relativeTo: era` settled — and it is a split brain, not just an era
-   redirect.** Timeline resolves counters against the **era**; the event's own sheet and search
-   resolve against the **event**; and the write follows the read via `dataset.uuid`. So an `@COUNT` in
-   an event body has **no single storage location**, and `set-quest-counter` must take an explicit
-   target and refuse to guess. Full evidence table under 7b.
-3. ✅ **DONE 2026-08-21. `create-simple-quest-page` writes `event` and `era` pages correctly — 8/9,
-   and the one failure is not type-specific.** The inference held: the quest-only branches really are
-   gated on `SIMPLE_QUEST_QUEST_TYPE`, and live-model validation reaches both models. It also settled
-   the four stored shapes 7b.1's orphan rule depends on, and turned up a **silent numeric coercion
-   that reports success**. See **Pre-flight check 3** under 7b below.
+⚠️ **A Foundry socket reconnect is not a module reload.** Refresh Foundry (F5) after any module
+deploy, before any gate that touches module-side code. This bit twice in Session 14, which is why
+**both** new gates open with a freshness probe that exits rather than report a result on stale code.
+Keep doing that.
 
-**Deploy state:** backend and module artifacts on disk match HEAD, verified by content rather than by
-hash (a stale bundle matched by hash and cost a gate in Session 11). The running backend was started
-directly with `node backend.bundle.cjs`, not by Claude Desktop; a Claude Desktop restart will reuse
-it via the lock file.
+**Housekeeping — one fixture.** `MCP Gate 7b1pre (safe to delete)` (`eFqBp8QXhPEGG32C`), 11 pages, in
+the **`Timeline`** special folder, so Simple Quest renders it as a second timeline in the UI. It is a
+**purpose-built 7b.2 fixture** and worth keeping until that cycle is gated: adjacent eras at −100..0,
+0..100 and 100..200 plus an endless 300..null; events at 100 (on an eraStart, contained), 150 ×2,
+200 (on an exclusive eraEnd, orphaned), 250 (outside every era, orphaned) and one with no year
+(placed in 0..100). Also one quest page left over from the coercion gate. The earlier
+`MCP Gate 7b.0` journal is already gone. There is still **no journal-delete tool**, and adding one was
+declined on purpose.
 
-⚠️ **A Foundry socket reconnect is not a module reload.** After copying module `dist/`, the browser
-keeps running the old JavaScript and reconnects on the socket anyway, so the connection looks healthy
-while the new code is absent. Gating in that state produces a false result. **Refresh Foundry (F5)
-before any gate that touches module-side code.**
-
-**Housekeeping — two fixtures now.** `MCP Gate 7b1pre (safe to delete)` (`eFqBp8QXhPEGG32C`), 6 pages,
-sits in the **`Timeline`** special folder, so Simple Quest may render it as a second timeline in the
-UI. Contents: eras `100–200`, `−100–0` and `300`-with-`null`-end; events at `year 150` and two at
-`year: null`. Worth keeping as a 7b.1 starting fixture, but **it is not sufficient on its own** — it
-has no event on an `eraEnd` boundary, none on an `eraStart`, none dated outside every era, and no era
-that actually spans zero. 7b.1's gate must add those four. And
-`MCP Gate 7b.0 (safe to delete)` (`tbMwT82Mb8s9EJ7r`) in the `Quests`
-folder is gate litter and can be deleted by name prefix. Earlier `MCP Gate *` journals were already
-cleaned; Foundry logged the resulting orphaned pages as deleted on launch, which is benign. There is still **no journal-delete tool**,
-and adding one was declined on purpose — a permanently-resident destructive tool to serve a testing
-convenience is a bad trade.
-
-**After 7b's tools ship, do 7z** — the GM-facing usage documentation, agreed 2026-08-17. It is the
-last deliverable of the phase and it closes three gaps that no per-tool description can: workflow
-sequencing, the journal-isolation rule, and the fact that enrichers exist at all.
+**After 7b's tools ship, do 7z** — the GM-facing usage documentation, agreed 2026-08-17. It lives in
+the play vault as a skill and is the last deliverable of the phase.
 
 ---
 
-#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 next**
+#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 done 2026-08-21, 7b.2 next**
 
 > **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
 > surface listed further down: **`event`/`era` timeline** (the campaign involves history and dated
@@ -2854,6 +2821,67 @@ Checked for a second door: **`set-quest-progress` is not affected.** It never re
 `validateSystemData`, but it validates `status` against its own explicit allowlist, so `5`, `1.5` and
 `"bogus"` were already refused with the status left untouched.
 
+##### ✅ 7b.1 — `get-timeline` **DONE 2026-08-21, gate 15/15 (56 → 57)**
+
+Reproduces `Timeline._prepareContext` rather than approximating it, coercions included, because the
+tool's job is to report what the module _does_. Returns eras sorted by `eraStart`, events sorted by
+`year` each resolved to its containing era, **`orphanedEvents` with a reason per event**, the six axis
+flags with Simple Quest's own defaults, every page `uuid`, `layoutWarnings`, and a `playerView`.
+
+**Four things building it turned up that the source-reading passes had not:**
+
+1. **A journal is a timeline only by folder membership — there is no marker flag.**
+   `SimpleQuest.js` L965-975 collects the `timeline` special directory recursively; nothing else
+   decides. So a journal full of `era`/`event` pages anywhere else renders _nothing_, with no error
+   and no empty-state. The tool returns `inTimelineFolder` and, when false, a `renderWarning`.
+   Gate-checked both ways against a real Simple Quest journal that lives in `Quests`.
+
+2. **The yearless-event claim is now observed, not derived.** `Gate Event NoYear` (`year: null`)
+   renders inside `Gate Era Mid` (0..100), exactly as `null >= 0 && null < 100` predicts. It is not
+   orphaned — it is silently dated to year 0. Pre-flight 3 could only derive this; the 0..100 era in
+   the gate fixture demonstrates it.
+
+3. **An era with no `eraEnd` gets a _negative_ height under static scaling.** `ERA_SCALES` is
+   `(eraEnd - eraStart) * timeScale`, and `null - 300` is `-300`. That subtracts from `totalHeight`
+   and shifts the start pixel of every era after it, so one endless era distorts the whole axis. This
+   is new — the earlier analysis had the null-end era covering nothing, but not corrupting the layout
+   of its neighbours.
+
+4. **Eras are permission-filtered _before_ events are placed** (L60-62). Hiding an era therefore
+   hides every player-visible event inside it, on the player's client only — the GM's timeline looks
+   correct. Same family as the 7a.5 finding that page ownership inside a visible journal is not what
+   it appears. `playerView.orphanedForPlayersOnly` reports it; gate check 14 sets the trap up live
+   (journal + one event visible, its era hidden) and check 15 tears it back down.
+
+**The L68-vs-L117 sizing gap is not an edge case.** Three of the fixture's four eras report it, because
+any event dated on a boundary is counted by the inclusive sizing pass and then dropped by the
+exclusive placement pass. The warning names the era and the count.
+
+##### Gate 15/15, live, 2026-08-21
+
+Expected values were **derived by hand from L117 before running**, so the gate asserts predictions
+rather than echoing the tool. The fixture uses **adjacent** eras (−100..0, 0..100, 100..200, plus
+300..null) — a fixture with gaps between eras cannot distinguish an inclusive end from an exclusive
+one, which is the whole point of checks 1-3.
+
+| #     | Check that can actually fail                                                                                          |
+| ----- | --------------------------------------------------------------------------------------------------------------------- |
+| 1     | `orphanedEvents` is exactly `[OnEnd(200), Outside(250)]` — and `OnStart(100)` is **not** in it                        |
+| 2     | the `eraEnd`-dated event's reason names the exclusive bound _and_ the era it just missed                              |
+| 3     | year 100 lands in `Gate Era A` (100..200), **not** `Gate Era Mid` (0..100) — `eraStart` is inclusive                  |
+| 4     | the yearless event is **placed in Era Mid**, not orphaned                                                             |
+| 5     | year 250 reports "no era covers", listing the era ranges                                                              |
+| 6-7   | era order by `eraStart`; `eventsPlaced` per era is 0 / 1 / 3 / 0                                                      |
+| 8     | warns on the null-end era and the 4-vs-3 sizing gap, and does **not** call adjacency an overlap                       |
+| 9     | unset axis flags report SQ's defaults (10 / false / BC / AC / false / always)                                         |
+| 10    | `inTimelineFolder` true for the fixture, **false** for a Simple Quest journal in `Quests`                             |
+| 11    | **anti-silent-default:** no identifier + two timeline journals ⇒ refuses and lists them                               |
+| 12    | `journalName` matches exactly and **refuses a substring**                                                             |
+| 13-15 | `playerView` empty while hidden; the player-only orphan appears when the trap is set; and clears when it is torn down |
+
+The harness opens with a **freshness probe** that exits rather than report on a browser still running
+the old module. Same pattern as the coercion gate, and worth keeping in every module-side gate.
+
 ##### Cycles
 
 **7b.0 — Flags foundation (no new tools). ✅ DONE, gate passed 10/10 + UI confirmed 2026-08-18.** A write path for `flags['simple-quest']` on both
@@ -2863,7 +2891,7 @@ live-schema validation has no equivalent — instead each _caller_ declares its 
 and the writer refuses anything outside it. Counter ids are arbitrary by design and are the
 exception, scoped to the `counters` object.
 
-**7b.1 — `get-timeline`.** Read a timeline journal exactly as `Timeline._prepareContext` does: eras
+**7b.1 — `get-timeline`. DONE 2026-08-21, gate 15/15 (56 -> 57).** Read a timeline journal exactly as `Timeline._prepareContext` does: eras
 sorted by `eraStart`, events sorted by `year`, each event resolved to its containing era — and
 **`orphanedEvents` listed explicitly**, with the reason (no era covers the year / era has a null
 `eraEnd` / year equals an exclusive `eraEnd`). Read-only, and it is the tool that makes the headline

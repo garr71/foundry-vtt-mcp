@@ -4204,6 +4204,332 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Read a Simple Quest timeline the way the module renders it, and say what is invisible.
+   *
+   * `Timeline._prepareContext` (Timeline.js L41-165) is **reproduced, not approximated** —
+   * coercions included — because the point of this tool is to report what the module does,
+   * not what it ought to do. Four behaviours are load-bearing:
+   *
+   * - **Containment is exclusive at the end** (L117 `year >= eraStart && year < eraEnd`) and
+   *   a miss is a bare `continue`. An uncontained event renders nowhere while every field on
+   *   it reads back correctly, which is what makes it invisible rather than broken.
+   * - **`null` coerces to `0` in that comparison.** An era with no `eraEnd` behaves as if it
+   *   ended at year 0 — it still captures negative years — and an event with no `year`
+   *   behaves as if dated 0. Neither is excluded; both are silently relocated.
+   * - **Era sizing (L68) is inclusive** while placement (L117) is exclusive, so a
+   *   boundary-dated event inflates its era's height and is then never drawn.
+   * - **Eras are permission-filtered before events are placed** (L60-62). Hiding an era
+   *   therefore hides every visible event inside it, on the player's client only.
+   *
+   * A journal is a timeline **only by living in the `timeline` special folder**
+   * (SimpleQuest.js L965-975, recursive through subfolders). There is no marker flag, so a
+   * journal full of era and event pages anywhere else never renders at all.
+   */
+  async getTimeline(request: {
+    journalId?: string | undefined;
+    journalName?: string | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const moduleId = 'simple-quest';
+    const module = game.modules?.get(moduleId);
+    if (!module?.active) {
+      return {
+        success: false,
+        message: `The "${moduleId}" module is not active in this world; it has no timelines.`,
+      };
+    }
+
+    // The timeline directory is identified by its flag, never by its name.
+    const journalFolders = Array.from<any>(game.folders ?? []).filter(
+      (f: any) => f.type === 'JournalEntry'
+    );
+    const timelineFolder = journalFolders.find(
+      (f: any) => f.getFlag?.(moduleId, 'simpleQuestDir') === 'timeline'
+    );
+
+    const timelineJournalIds = new Set<string>();
+    const collect = (folder: any): void => {
+      if (!folder) return;
+      for (const j of folder.contents ?? []) timelineJournalIds.add(j.id);
+      for (const sub of folder.children ?? []) collect(sub?.folder);
+    };
+    collect(timelineFolder);
+    const timelineJournals = Array.from(timelineJournalIds)
+      .map((id: string) => game.journal.get(id))
+      .filter(Boolean)
+      .map((j: any) => ({ id: j.id, name: j.name }));
+
+    // ---- resolve the journal ---------------------------------------------------------
+    let journal: any = null;
+    let resolvedBy: string;
+
+    if (request.journalId) {
+      journal = game.journal.get(request.journalId);
+      if (!journal) {
+        return { success: false, message: `Journal not found: ${request.journalId}` };
+      }
+      resolvedBy = 'journalId';
+    } else if (request.journalName) {
+      // Exact match only. Resolving a document by "contains" is the defect this project has
+      // now shipped five times.
+      const matches = Array.from<any>(game.journal ?? []).filter(
+        (j: any) => j.name === request.journalName
+      );
+      if (matches.length === 0) {
+        return {
+          success: false,
+          message:
+            `No journal is named exactly "${request.journalName}". Timeline journals: ` +
+            `${timelineJournals.map(j => `"${j.name}"`).join(', ') || 'none'}.`,
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          success: false,
+          message:
+            `${matches.length} journals are named "${request.journalName}"; pass journalId ` +
+            `instead: ${matches.map((j: any) => j.id).join(', ')}.`,
+        };
+      }
+      journal = matches[0];
+      resolvedBy = 'journalName';
+    } else if (timelineJournals.length === 1) {
+      // Defaulting to the only candidate is a lookup that succeeded, not a silent fallback,
+      // and the response says which it was.
+      journal = game.journal.get(timelineJournals[0]!.id);
+      resolvedBy = 'only-timeline-journal';
+    } else {
+      return {
+        success: false,
+        timelineJournals,
+        message:
+          timelineJournals.length === 0
+            ? `No journals are in the Simple Quest timeline folder${
+                timelineFolder ? ` ("${timelineFolder.name}")` : ', which does not exist'
+              }.`
+            : `${timelineJournals.length} timeline journals exist; name one with journalId ` +
+              `or journalName: ${timelineJournals.map(j => `"${j.name}" (${j.id})`).join(', ')}.`,
+      };
+    }
+
+    const inTimelineFolder = timelineJournalIds.has(journal.id);
+
+    // ---- axis configuration, with Simple Quest's own defaults ------------------------
+    const flag = (k: string): any => journal.getFlag?.(moduleId, k);
+    const timeScale = (flag('timeScale') as number) ?? 10;
+    const config = {
+      timeScale,
+      // L42 floors it: a stored 0 renders at 0.1, not 0.
+      effectiveTimeScale: Math.max(timeScale, 0.1),
+      dynamicTimeScale: (flag('dynamicTimeScale') as boolean) ?? false,
+      negativeAbb: (flag('negativeAbb') as string) ?? 'BC',
+      positiveAbb: (flag('positiveAbb') as string) ?? 'AC',
+      showMinus: (flag('showMinus') as boolean) ?? false,
+      content: (flag('content') as string) ?? 'always',
+    };
+
+    // ---- pages ------------------------------------------------------------------------
+    const pages = Array.from<any>(journal.pages ?? []);
+
+    // "Visible to players" from default ownership, the same proxy the visibility tool uses.
+    // Per-user overrides are not considered, and the response says so.
+    const journalDefault: number = journal.ownership?.default ?? 0;
+    const playerVisible = (page: any): boolean => {
+      const own: number = page.ownership?.default ?? -1;
+      const effective = own === -1 ? journalDefault : own;
+      return journalDefault >= 2 && effective >= 2;
+    };
+
+    const eras = pages
+      .filter((p: any) => p.type === `${moduleId}.era`)
+      .sort((a: any, b: any) => a.system.eraStart - b.system.eraStart);
+    const events = pages
+      .filter((p: any) => p.type === `${moduleId}.event`)
+      .sort((a: any, b: any) => a.system.year - b.system.year);
+
+    // Verbatim from L117, coercions included. Do NOT "correct" this — the tool reports what
+    // renders, and `null` compares as 0 here on purpose.
+    const containingEra = (year: any, eraList: any[]): any =>
+      eraList.find((e: any) => year >= e.system.eraStart && year < e.system.eraEnd);
+
+    const place = (
+      eraList: any[],
+      eventList: any[]
+    ): { placed: Array<{ ev: any; era: any }>; orphaned: any[] } => {
+      const placed: Array<{ ev: any; era: any }> = [];
+      const orphaned: any[] = [];
+      for (const ev of eventList) {
+        const era = containingEra(ev.system?.year, eraList);
+        if (era) placed.push({ ev, era });
+        else orphaned.push(ev);
+      }
+      return { placed, orphaned };
+    };
+
+    /** Why this event landed nowhere. Diagnosed after the verdict, never instead of it. */
+    const orphanReason = (event: any, eraList: any[]): string => {
+      const year = event.system?.year;
+      if (year === null || year === undefined) {
+        return (
+          `the event has no year. Simple Quest compares null as 0, so it can only land in an ` +
+          `era covering year 0 — and orphans everywhere else.`
+        );
+      }
+      if (eraList.length === 0) return 'this journal has no era pages visible in this view.';
+      const onEnd = eraList.find((e: any) => year === e.system?.eraEnd);
+      if (onEnd) {
+        return (
+          `dated exactly on "${onEnd.name}"'s eraEnd (${onEnd.system.eraEnd}), and L117 uses ` +
+          `"<", so the end year belongs to the next era rather than this one.`
+        );
+      }
+      const endless = eraList.find(
+        (e: any) => e.system?.eraEnd == null && year >= e.system?.eraStart
+      );
+      if (endless) {
+        return (
+          `"${endless.name}" starts at ${endless.system.eraStart} and would contain this year, ` +
+          `but it has no eraEnd. Simple Quest compares null as 0, so that era covers nothing ` +
+          `at or above year 0.`
+        );
+      }
+      const ranges = eraList
+        .map((e: any) => `"${e.name}" ${e.system?.eraStart}..${e.system?.eraEnd}`)
+        .join('; ');
+      return `no era covers year ${year}. Eras present: ${ranges}.`;
+    };
+
+    const gm = place(eras, events);
+    const playerEras = eras.filter(playerVisible);
+    const playerEvents = events.filter(playerVisible);
+    const player = place(playerEras, playerEvents);
+
+    // ---- layout warnings ---------------------------------------------------------------
+    const layoutWarnings: string[] = [];
+    for (const era of eras) {
+      const start = era.system?.eraStart;
+      const end = era.system?.eraEnd;
+
+      if (end == null) {
+        layoutWarnings.push(
+          `Era "${era.name}" has no eraEnd. Static scaling sizes it as (eraEnd - eraStart), ` +
+            `which with null is ${0 - start} — negative for any positive eraStart, and it ` +
+            `shifts every era after it. It also covers nothing at or above year 0.`
+        );
+      } else if (end === start) {
+        layoutWarnings.push(
+          `Era "${era.name}" is zero-length (eraStart === eraEnd === ${start}). L117 can never ` +
+            `match an event to it and static scaling gives it 0 px, so it is invisible and ` +
+            `captures nothing.`
+        );
+      }
+
+      // L68 counts inclusively; L117 places exclusively. The gap is reserved space that
+      // nothing is ever drawn into.
+      const counted = events.filter(
+        (e: any) => e.system?.year >= start && e.system?.year <= end
+      ).length;
+      const drawn = gm.placed.filter(x => x.era === era).length;
+      if (counted !== drawn) {
+        layoutWarnings.push(
+          `Era "${era.name}" is sized for ${counted} event(s) by L68 (inclusive) but only ` +
+            `${drawn} will be drawn in it by L117 (exclusive). The layout reserves space for ` +
+            `${counted - drawn} event(s) that never render.`
+        );
+      }
+    }
+    for (let i = 0; i < eras.length - 1; i++) {
+      const a = eras[i];
+      const b = eras[i + 1];
+      if (a.system?.eraEnd != null && b.system?.eraStart < a.system.eraEnd) {
+        layoutWarnings.push(
+          `Eras "${a.name}" (${a.system.eraStart}..${a.system.eraEnd}) and "${b.name}" ` +
+            `(${b.system.eraStart}..${b.system.eraEnd}) overlap. L117 is a .find() over eras ` +
+            `sorted by eraStart, so every event inside the overlap silently belongs to ` +
+            `"${a.name}".`
+        );
+      }
+    }
+
+    const gmOrphanIds = new Set(gm.orphaned.map((e: any) => e.id));
+    const playerOnlyOrphans = player.orphaned.filter((e: any) => !gmOrphanIds.has(e.id));
+    const hiddenEras = eras.filter((e: any) => !playerVisible(e));
+    const hiddenEvents = events.filter((e: any) => !playerVisible(e));
+
+    return {
+      success: true,
+      journalId: journal.id,
+      journalName: journal.name,
+      resolvedBy,
+      inTimelineFolder,
+      ...(inTimelineFolder
+        ? {}
+        : {
+            renderWarning:
+              `This journal is NOT in the Simple Quest timeline folder` +
+              `${timelineFolder ? ` ("${timelineFolder.name}")` : ''}, and Simple Quest ` +
+              `identifies a timeline by folder alone — there is no marker flag. None of these ` +
+              `pages render as a timeline until the journal is moved there.`,
+          }),
+      config,
+      eraCount: eras.length,
+      eventCount: events.length,
+      eras: eras.map((e: any) => ({
+        id: e.id,
+        uuid: e.uuid,
+        name: e.name,
+        eraStart: e.system?.eraStart ?? null,
+        eraEnd: e.system?.eraEnd ?? null,
+        color: e.system?.color ?? null,
+        label: e.system?.label ?? null,
+        eventsPlaced: gm.placed.filter(x => x.era === e).length,
+        playerVisible: playerVisible(e),
+      })),
+      events: gm.placed.map(({ ev, era }) => ({
+        id: ev.id,
+        uuid: ev.uuid,
+        name: ev.name,
+        year: ev.system?.year ?? null,
+        duration: ev.system?.duration ?? 0,
+        eraName: era.name,
+        eraUuid: era.uuid,
+        playerVisible: playerVisible(ev),
+      })),
+      orphanedEvents: gm.orphaned.map((ev: any) => ({
+        id: ev.id,
+        uuid: ev.uuid,
+        name: ev.name,
+        year: ev.system?.year ?? null,
+        playerVisible: playerVisible(ev),
+        reason: orphanReason(ev, eras),
+      })),
+      ...(layoutWarnings.length > 0 ? { layoutWarnings } : {}),
+      playerView: {
+        basis: 'default ownership only; per-user overrides are not considered',
+        visibleEras: playerEras.length,
+        visibleEvents: playerEvents.length,
+        hiddenEras: hiddenEras.map((e: any) => e.name),
+        hiddenEvents: hiddenEvents.map((e: any) => e.name),
+        ...(playerOnlyOrphans.length > 0
+          ? {
+              orphanedForPlayersOnly: playerOnlyOrphans.map((ev: any) => ({
+                name: ev.name,
+                uuid: ev.uuid,
+                year: ev.system?.year ?? null,
+                reason: orphanReason(ev, playerEras),
+              })),
+              warning:
+                `${playerOnlyOrphans.length} event(s) render for the GM but not for players. ` +
+                `Simple Quest filters eras by permission BEFORE placing events (L60-62), so ` +
+                `hiding an era also hides every player-visible event inside it.`,
+            }
+          : {}),
+      },
+    };
+  }
+
+  /**
    * Create one Simple Quest page.
    *
    * **Defaults deliberately diverge from Simple Quest's own, and the divergence is the

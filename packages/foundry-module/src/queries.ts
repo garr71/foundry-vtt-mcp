@@ -64,6 +64,7 @@ export class QueryHandlers {
       this.handleGetJournalPageContent.bind(this);
     CONFIG.queries[`${modulePrefix}.getSimpleQuestContext`] =
       this.handleGetSimpleQuestContext.bind(this);
+    CONFIG.queries[`${modulePrefix}.getTimeline`] = this.handleGetTimeline.bind(this);
     CONFIG.queries[`${modulePrefix}.createSimpleQuestPage`] =
       this.handleCreateSimpleQuestPage.bind(this);
     CONFIG.queries[`${modulePrefix}.updateSimpleQuestPage`] =
@@ -700,6 +701,27 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to get Simple Quest context: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle a Simple Quest timeline read
+   */
+  async handleGetTimeline(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      return await this.dataAccess.getTimeline({
+        journalId: data?.journalId,
+        journalName: data?.journalName,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to read timeline: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

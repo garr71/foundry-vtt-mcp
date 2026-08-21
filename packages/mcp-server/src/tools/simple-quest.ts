@@ -36,6 +36,25 @@ export class SimpleQuestTools {
         },
       },
       {
+        name: 'get-timeline',
+        description:
+          'Read a Simple Quest timeline the way the module actually renders it, and report what will NOT appear. Simple Quest drops any event whose year falls in no era: the page still exists and every field reads back correctly, so nothing else reveals it. This tool lists those under "orphanedEvents" with the reason for each. Era containment is exclusive at the end (an event dated exactly on an eraEnd belongs to the NEXT era, not that one), and null compares as 0, so an era with no eraEnd covers nothing at or above year 0 and an event with no year is treated as year 0 rather than excluded. Also returns the six axis flags with the defaults Simple Quest itself applies, each page uuid for cross-links, layout warnings (negative-height or zero-length eras, overlaps, and eras sized for events that never draw), and a playerView showing which events the party will not see because the era containing them is hidden. Read-only. A journal is a timeline only by living in the Timeline folder — there is no marker flag — so this reports inTimelineFolder too.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            journalId: {
+              type: 'string',
+              description: 'The timeline journal to read. Use this or "journalName".',
+            },
+            journalName: {
+              type: 'string',
+              description:
+                'EXACT journal name, matched exactly and never as a substring. If neither this nor journalId is given and exactly one timeline journal exists, that one is read and "resolvedBy" says so; if several exist the call is refused and they are listed.',
+            },
+          },
+        },
+      },
+      {
         name: 'create-simple-quest-page',
         description:
           'Create one Simple Quest page (quest, lore, character, creature, faction, location, event, era, achievement). Call get-simple-quest-context first for the exact system field names. IMPORTANT — defaults are for PREP and deliberately differ from the Simple Quest module\'s own: the page is created hidden from players (ownership none on both journal and page), a quest page gets status -1 (Undiscovered) rather than the module default 0 (In Progress), and every objective in the body is marked secret. Pass visibleToPlayers: true to create it already visible, or reveal later with the visibility tool. Body prose goes in "text" as HTML; quest objectives are <li> items in that HTML. One page per call.',
@@ -198,6 +217,29 @@ export class SimpleQuestTools {
         },
       },
     ];
+  }
+
+  async handleGetTimeline(args: any): Promise<any> {
+    this.logger.info('Reading Simple Quest timeline', {
+      journalId: args?.journalId,
+      journalName: args?.journalName,
+    });
+
+    try {
+      const result = await this.foundryClient.query('foundry-mcp-bridge.getTimeline', {
+        journalId: args?.journalId,
+        journalName: args?.journalName,
+      });
+
+      // A refusal is an answer — several timeline journals, or none. Returned as-is rather
+      // than thrown, so the message survives ErrorHandler.handleToolError.
+      return result;
+    } catch (error) {
+      this.logger.error('Failed to read timeline', error);
+      throw new Error(
+        `Failed to read timeline: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handleGetSimpleQuestContext(_args: any): Promise<any> {

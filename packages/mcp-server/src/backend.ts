@@ -1819,6 +1819,10 @@ async function startBackend(): Promise<void> {
                   break;
 
                 // Simple Quest tools
+                case 'get-timeline':
+                  result = await simpleQuestTools.handleGetTimeline(args);
+                  break;
+
                 case 'get-simple-quest-context':
                   result = await simpleQuestTools.handleGetSimpleQuestContext(args);
 
