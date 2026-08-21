@@ -2530,9 +2530,9 @@ name, before trusting a result.
 
 #### ▶️ START HERE NEXT SESSION (updated 2026-08-21, end of Session 14)
 
-**State:** Phase 7a complete, **7b.0 done** (gate 10/10 + UI confirmed), and **all three pre-flight
-checks for 7b.1 are now closed** — check 3 ran live on 2026-08-21. Still **56 tools**: 7b.0 and the
-pre-flights add none. Nothing is half-built. `master` is **1 commit ahead of `origin/master`**
+**State:** Phase 7a complete, **7b.0 done** (gate 10/10 + UI confirmed), **all three pre-flight checks
+for 7b.1 closed**, and the **silent-coercion defect that check 3 turned up is fixed** (gate 11/11).
+Still **56 tools** — none of that adds one. Nothing is half-built. `master` is **1 commit ahead of `origin/master`**
 (`6d2f490`, docs only) plus this session's plan update.
 
 **Next cycle: 7b.1 — `get-timeline`**, the first cycle of 7b that moves the count (56 → 57). Read a
@@ -2552,9 +2552,11 @@ and is silently placed in whatever era spans zero**, because `null >= 0` is `tru
 plus JS semantics, **not yet observed rendering** — the pre-flight fixture has no era spanning zero,
 so 7b.1's gate must build one.
 
-⚠️ **7b.2 grew a second job.** Pre-flight 3 found that a bad `system` value is reported as success:
-`year: "abc"` returns `success: true` with an empty change set, and `year: 1.5` silently stores `2`.
-The requested-vs-stored check now ships with 7b.2. Details under **The one failure** below.
+✅ **The coercion defect pre-flight 3 found is already fixed** (2026-08-21, gate 11/11, no new tool).
+`validateSystemData` now checks values as well as key names, before the first write, by asking the
+live `DataField` what it would store. Four tools got the fix at once. Details under **The one
+failure** below. **Foundry must be refreshed (F5) after any module deploy** — the gate's freshness
+probe caught a stale browser on its first run.
 
 ⚠️ **Debt from 7b.0 that 7b.3 must clear:** the flags writer is document-agnostic and handles a
 `JournalEntry` unchanged, but **nothing exercises that branch yet**. 7b.3 declares the six journal
@@ -2775,7 +2777,10 @@ era is `−100–0`, and `0` is an _exclusive_ end, so its two yearless events o
 the rendered timeline. Recording it as derived, because a claim that has not been watched fail is not
 yet evidence.
 
-##### ⚠️ The one failure — silent numeric coercion reported as success (not event/era specific)
+##### ✅ The one failure — silent numeric coercion reported as success. **FIXED 2026-08-21, gate 11/11**
+
+> Found by this pre-flight, fixed the same session at Franklin's direction rather than waiting for
+> 7b.2. No new tool; **still 56**. The write-up below is the diagnosis; the fix follows it.
 
 `year: 1.5` was stored as `2` and the call returned `success: true`. Root cause is core, confirmed in
 `common/data/fields.mjs`: `NumberField._cleanType` does `if (this.integer) value = Math.round(value)`
@@ -2803,9 +2808,51 @@ symmetric check. Fix shape: after `page.update(update)`, compare each requested 
 `after[key]`; emit `coercedSystemFields` and refuse the success claim when a requested value did not
 land.
 
-**Scheduled into 7b.2**, which already reworks the create/update response. Not 7b.1 — that cycle is
-read-only. Applies to `create-simple-quest-page` too (that is where `1.5 → 2` was first seen) and to
-every page type, quest included; it is not a timeline bug.
+Applies to `create-simple-quest-page` too (that is where `1.5 → 2` was first seen) and to every page
+type, quest included; it is not a timeline bug.
+
+###### The fix — pre-validate, do not verify afterwards
+
+`validateSystemData` already walked the schema and held the live `DataField` at every leaf, and all
+**four** callers (`create-simple-quest-page`, `update-simple-quest-page`, `create-quest-journal`,
+`update-quest-journal`) already returned on `!check.valid`. So the check went **there**, before the
+first write — not into a post-write read-back like the flags path. Pre-validation is strictly better
+here: a refusal provably leaves the document untouched, with no partial write to explain.
+
+**It asks the field what it would store rather than reimplementing core's cleaning rules**, which
+would rot on the next Foundry release:
+
+```ts
+const cleaned = field.clean(sent); // what Foundry would actually store
+const failure = field.validate(cleaned); // does that survive validation?
+```
+
+- `failure` → refuse, quoting the model's own message (`"must be a number"`, `"5 is not a valid choice"`).
+- `cleaned` differs from `sent` → refuse, naming the value it **would** have stored.
+- Otherwise accept.
+
+Two lossless normalisations are exempt, or the fix would refuse ordinary writes: a string that spells
+exactly the number parsed out of it (`"42"` → `42`) and a string only re-cased or trimmed
+(`"#FF0000"` → `"#ff0000"`, which `ColorField._cast` does to every colour). **Only primitive leaves
+are value-checked** — `SchemaField.clean` fills in defaults for subkeys the caller omitted, so
+checking compound values would refuse every partial write to `html`, `mainTag` or `iconList0`.
+
+Unknown keys still take precedence over value problems in the same call: a caller who misspelled a
+field name is not helped by a second complaint about the value they put in it. New refusal reason:
+**`value-would-be-altered`**, with a `coercedValues: [{field, sent, wouldStore, reason}]` array.
+
+**Gate 11/11, live, 2026-08-21.** The two that matter most are the ones that catch _over_-refusal,
+since every other check passes on a validator that simply says no to everything: `"77"` must still be
+**accepted** and stored as `77`, and a partial `html: {content}` write must still be **accepted**. Also
+covered: nothing written on refusal (read back, not assumed), the refusal naming `wouldStore: 2`,
+unknown-key precedence, `#FF0000` accepted, `status: 5` refused with status left at `-1`, and the
+create path refusing without creating a page. The harness opens with a **freshness probe** that exits
+rather than report a result if the browser is still running the old module — it fired on the first
+run, which is why it exists.
+
+Checked for a second door: **`set-quest-progress` is not affected.** It never reaches
+`validateSystemData`, but it validates `status` against its own explicit allowlist, so `5`, `1.5` and
+`"bogus"` were already refused with the status left untouched.
 
 ##### Cycles
 
@@ -2823,20 +2870,15 @@ sorted by `eraStart`, events sorted by `year`, each event resolved to its contai
 trap visible. Also returns the journal's axis flags and each page's `uuid`, which is what
 cross-link emission needs.
 
-**7b.2 — Containment guard on create/update, plus the coercion check.** Two things, because both
-change the same response object:
+**7b.2 — Containment guard on create/update.** When an `event` is written, report whether it lands in
+an era. **Warn, do not refuse:** writing events before their eras exist is a legitimate prep order, so
+a refusal would fight the workflow. But the response must say so plainly, and `get-timeline` must list
+it. Same for an `era` written with a null `eraEnd`, and for a **yearless** event (`year: null`), which
+pre-flight 3 showed is not orphaned at all but silently lands in whatever era spans zero.
 
-1. **Containment.** When an `event` is written, report whether it lands in an era. **Warn, do not
-   refuse:** writing events before their eras exist is a legitimate prep order, so a refusal would
-   fight the workflow. But the response must say so plainly, and `get-timeline` must list it. Same
-   for an `era` written with a null `eraEnd`, and for a **yearless** event (`year: null`), which
-   pre-flight 3 showed is not orphaned at all but silently lands in whatever era spans zero.
-2. **Requested-vs-stored verification** (added 2026-08-21 from pre-flight 3). Compare each requested
-   `system.<key>` against what the document holds after the write; emit `coercedSystemFields` and
-   **refuse the success claim** when a requested value did not land. Today `year: "abc"` returns
-   `success: true` with an empty change set, and `year: 1.5` silently becomes `2`. Mirror
-   `applySimpleQuestFlags`, which already does exactly this for flags. Applies to
-   `create-simple-quest-page` as well, and to every page type — it is not a timeline bug.
+> The value-coercion check that was briefly scheduled here **shipped early on 2026-08-21** — it is a
+> live defect in four already-deployed tools, so it did not wait for a timeline cycle. See
+> **The one failure** above. 7b.2 keeps only the containment half.
 
 **7b.3 — `set-timeline-config`.** The six journal flags. Numbers validated (`timeScale > 0`),
 `content` constrained to its three choices.
@@ -2861,8 +2903,6 @@ link, a visible embarrassment — so until then the tools should treat `@time` a
 | 1     | **Boundary:** an event dated exactly on an era's `eraEnd` must be reported orphaned (exclusive bound), while one dated on `eraStart` must not. A fixture where both eras are adjacent distinguishes the off-by-one; one with a gap does not.                         |
 | 1     | Assert `get-timeline`'s era order and event-to-era mapping match what the module renders, not what the numbers suggest — eras stack contiguously, so a gap in years is not a gap on screen.                                                                          |
 | 2     | Create an event with no eras present at all: must succeed **and** warn. A refusal here fails the workflow, so the check is that it wrote and reported, not that it blocked.                                                                                          |
-| 2     | Write `year: "abc"` and assert the call **fails**. Today it returns `success: true` with `changedSystemFields: {}` — identical to a no-op write of the same value, which is why it needs a check that can tell them apart.                                           |
-| 2     | Write `year: 1.5` and assert the response says the stored value is `2` **and** flags it as coerced. Asserting only that `2` was stored passes on today's code, which already reports the landed value truthfully; the new information is the coercion notice.        |
 | 2     | Write a **yearless** event against a fixture whose eras span zero, and assert it is reported as yearless rather than as contained. `null >= 0` is `true` in JS, so a naive containment test reports it contained and the check silently passes on a wrong answer.    |
 | 3     | **Call with no arguments** and assert the flags are unchanged rather than reset to defaults — a config writer that helpfully fills in `timeScale: 10` would silently retune an existing timeline.                                                                    |
 | 3     | Away-and-back on `timeScale`, and confirm in the UI that the axis actually rescales. Reading the flag back proves storage, not effect.                                                                                                                               |

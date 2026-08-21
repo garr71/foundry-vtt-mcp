@@ -56,7 +56,7 @@ export class SimpleQuestTools {
             system: {
               type: 'object',
               description:
-                'Type-specific fields, e.g. {"questGiver":"Aldern","difficulty":"Moderate"}. Validated against the live data model — unknown keys are refused by name and nothing is written. Omit "status" to get the prep default of -1.',
+                'Type-specific fields, e.g. {"questGiver":"Aldern","difficulty":"Moderate"}. Validated against the live data model by key AND by value — unknown keys are refused by name, and so is any value the model would not store as sent (Foundry cleans before it validates, so year 1.5 would become 2 and year "abc" would be dropped, both silently). The refusal names the value it would have stored. Nothing is written either way. Omit "status" to get the prep default of -1.',
             },
             journalId: {
               type: 'string',
@@ -106,7 +106,7 @@ export class SimpleQuestTools {
             system: {
               type: 'object',
               description:
-                'Partial system fields to merge, e.g. {"difficulty":"Severe"}. Unknown keys are refused by name and nothing is written. Foundry "-=" unset syntax is refused.',
+                'Partial system fields to merge, e.g. {"difficulty":"Severe"}. Unknown keys are refused by name, and so is any value the model would not store as sent — a non-integer year, an out-of-range number, an unparseable one. The refusal names what it would have stored. Nothing is written either way. Foundry "-=" unset syntax is refused.',
             },
             allowOrphanedObjectives: {
               type: 'boolean',

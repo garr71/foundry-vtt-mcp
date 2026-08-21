@@ -4274,8 +4274,11 @@ export class FoundryDataAccess {
     if (!check.valid) {
       return {
         success: false,
+        refused: true,
+        reason: check.rejected.length > 0 ? 'unknown-system-keys' : 'value-would-be-altered',
         rejected: check.rejected,
         accepted: check.accepted,
+        ...(check.coerced.length > 0 ? { coercedValues: check.coerced } : {}),
         message: check.message,
       };
     }
@@ -4532,9 +4535,10 @@ export class FoundryDataAccess {
       return {
         success: false,
         refused: true,
-        reason: 'unknown-system-keys',
+        reason: check.rejected.length > 0 ? 'unknown-system-keys' : 'value-would-be-altered',
         rejected: check.rejected,
         accepted: check.accepted,
+        ...(check.coerced.length > 0 ? { coercedValues: check.coerced } : {}),
         message: check.message,
       };
     }
@@ -5512,12 +5516,38 @@ export class FoundryDataAccess {
     return { ok: unverified.length === 0, changed, unverified };
   }
 
+  /**
+   * Validate a `system` payload against the live data model, by key **and** by value.
+   *
+   * The value half exists because Foundry cleans before it validates:
+   * `NumberField._cleanType` runs `Math.round` when `integer: true`, so `_validateType`'s
+   * "must be an integer" branch is unreachable for any finite non-integer and `year: 1.5`
+   * lands as `2` with no error. Worse, `year: "abc"` casts to `NaN`, gets discarded, and
+   * the call returns success with an empty change set — indistinguishable from a no-op
+   * write of the same value. That is the house failure mode: a silent coercion, and then a
+   * false success.
+   *
+   * Checked here, before the first write, so a refusal provably leaves the document
+   * untouched — the same contract as the other guards. We ask the field itself what it
+   * would store (`clean`) and whether that survives (`validate`) rather than
+   * reimplementing core's cleaning rules, which would rot.
+   *
+   * Only primitive leaves are value-checked. `ObjectField` / `ArrayField` / `SetField` take
+   * arbitrary contents by design, and `SchemaField.clean` legitimately fills in defaults for
+   * subkeys the caller omitted — flagging that as a coercion would refuse every partial write.
+   */
   private validateSystemData(
     type: string,
     system: Record<string, unknown> | undefined
-  ): { valid: boolean; accepted: string[]; rejected: string[]; message?: string } {
+  ): {
+    valid: boolean;
+    accepted: string[];
+    rejected: string[];
+    coerced: Array<{ field: string; sent: unknown; wouldStore: unknown; reason: string }>;
+    message?: string;
+  } {
     if (!system || Object.keys(system).length === 0) {
-      return { valid: true, accepted: [], rejected: [] };
+      return { valid: true, accepted: [], rejected: [], coerced: [] };
     }
 
     const modelClass = (CONFIG as any).JournalEntryPage?.dataModels?.[type];
@@ -5529,6 +5559,7 @@ export class FoundryDataAccess {
         valid: false,
         accepted: [],
         rejected,
+        coerced: [],
         message:
           `Page type "${type}" has no registered data model, so it has no system fields; ` +
           `${rejected.length} submitted key(s) would have been silently discarded: ` +
@@ -5539,7 +5570,62 @@ export class FoundryDataAccess {
 
     const accepted: string[] = [];
     const rejected: string[] = [];
+    const coerced: Array<{ field: string; sent: unknown; wouldStore: unknown; reason: string }> =
+      [];
     const SchemaFieldClass = (foundry as any).data.fields.SchemaField;
+
+    /**
+     * Ask the field what it would actually store. Returns null when the value survives
+     * intact, or a description of the divergence when it does not.
+     */
+    const valueProblem = (
+      field: any,
+      sent: unknown
+    ): { wouldStore: unknown; reason: string } | null => {
+      // `clean(undefined)` returns the field's initial value, so an undefined leaf is a
+      // request to default rather than a coercion. JSON cannot carry one anyway.
+      if (sent === undefined) return null;
+      // Compound values: see the note on the method.
+      if (sent !== null && typeof sent === 'object') return null;
+
+      let cleaned: unknown;
+      try {
+        cleaned = field.clean(sent);
+      } catch (error) {
+        return {
+          wouldStore: undefined,
+          reason: `the field rejected it while cleaning (${
+            error instanceof Error ? error.message : 'unknown error'
+          })`,
+        };
+      }
+
+      const failure = field.validate(cleaned);
+      if (failure) {
+        return {
+          wouldStore: cleaned,
+          reason: String(failure?.message ?? failure),
+        };
+      }
+
+      if (Object.is(cleaned, sent)) return null;
+
+      // Two lossless normalisations are not coercions: a string that spells exactly the
+      // value the model parsed out of it ("42" -> 42), and a string the model only
+      // re-cased or trimmed ("#FF0000" -> "#ff0000").
+      if (typeof sent === 'string') {
+        const trimmed = sent.trim();
+        if (String(cleaned) === trimmed) return null;
+        if (typeof cleaned === 'string' && cleaned.toLowerCase() === trimmed.toLowerCase()) {
+          return null;
+        }
+      }
+
+      return {
+        wouldStore: cleaned,
+        reason: `the data model would store ${JSON.stringify(cleaned) ?? 'undefined'} instead`,
+      };
+    };
 
     const walk = (value: unknown, path: string[]): void => {
       const dotted = path.join('.');
@@ -5562,24 +5648,56 @@ export class FoundryDataAccess {
       }
 
       accepted.push(dotted);
+
+      const problem = valueProblem(field, value);
+      if (problem) {
+        coerced.push({
+          field: dotted,
+          sent: value,
+          wouldStore: problem.wouldStore,
+          reason: problem.reason,
+        });
+      }
     };
 
     for (const [key, value] of Object.entries(system)) walk(value, [key]);
 
-    if (rejected.length === 0) return { valid: true, accepted, rejected };
-
     const known = Object.keys(schema.fields ?? {})
       .sort()
       .join(', ');
-    return {
-      valid: false,
-      accepted,
-      rejected,
-      message:
-        `${rejected.length} key(s) are not in the live schema for "${type}" and would have ` +
-        `been silently discarded: ${rejected.join(', ')}. Nothing was written. ` +
-        `Top-level fields for this type: ${known}.`,
-    };
+
+    // Unknown keys are reported first and alone: a caller who misspelled a field name is
+    // not helped by a second complaint about the value they put in it.
+    if (rejected.length > 0) {
+      return {
+        valid: false,
+        accepted,
+        rejected,
+        coerced,
+        message:
+          `${rejected.length} key(s) are not in the live schema for "${type}" and would have ` +
+          `been silently discarded: ${rejected.join(', ')}. Nothing was written. ` +
+          `Top-level fields for this type: ${known}.`,
+      };
+    }
+
+    if (coerced.length > 0) {
+      return {
+        valid: false,
+        accepted,
+        rejected,
+        coerced,
+        message:
+          `${coerced.length} value(s) would not be stored as sent, and Foundry cleans before ` +
+          `it validates, so this would have succeeded silently: ` +
+          `${coerced
+            .map(c => `${c.field}=${JSON.stringify(c.sent)} (${c.reason})`)
+            .join('; ')}. Nothing was written. Send the value the model would store, or a ` +
+          `different one.`,
+      };
+    }
+
+    return { valid: true, accepted, rejected, coerced };
   }
 
   /**
@@ -5657,6 +5775,7 @@ export class FoundryDataAccess {
             success: false,
             rejected: check.rejected,
             accepted: check.accepted,
+            ...(check.coerced.length > 0 ? { coercedValues: check.coerced } : {}),
             message: `Page "${page.name}": ${check.message}`,
           };
         }
@@ -6084,6 +6203,7 @@ export class FoundryDataAccess {
             success: false,
             rejected: check.rejected,
             accepted: check.accepted,
+            ...(check.coerced.length > 0 ? { coercedValues: check.coerced } : {}),
             message: check.message,
           };
         }
