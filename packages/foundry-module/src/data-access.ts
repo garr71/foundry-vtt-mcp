@@ -4407,6 +4407,10 @@ export class FoundryDataAccess {
 
     // ---- layout warnings ---------------------------------------------------------------
     const layoutWarnings: string[] = [];
+    // ERA_SCALES, reproduced from L66-72. The dynamic branch uses the INCLUSIVE count
+    // (`eraEventsCount`), not the number actually placed, so the two branches disagree by
+    // design and both are reproduced as written.
+    const eraHeights = new Map<any, number>();
     for (const era of eras) {
       const start = era.system?.eraStart;
       const end = era.system?.eraEnd;
@@ -4431,6 +4435,15 @@ export class FoundryDataAccess {
         (e: any) => e.system?.year >= start && e.system?.year <= end
       ).length;
       const drawn = gm.placed.filter(x => x.era === era).length;
+
+      // `eraEnd - eraStart` with a null end is `0 - eraStart`: negative, not zero.
+      eraHeights.set(
+        era,
+        config.dynamicTimeScale
+          ? (counted + 1) * 300 * config.effectiveTimeScale
+          : (end - start) * config.effectiveTimeScale
+      );
+
       if (counted !== drawn) {
         layoutWarnings.push(
           `Era "${era.name}" is sized for ${counted} event(s) by L68 (inclusive) but only ` +
@@ -4450,6 +4463,30 @@ export class FoundryDataAccess {
             `"${a.name}".`
         );
       }
+    }
+
+    // The axis itself. Simple Quest writes `height: <totalHeight>px` onto all three columns
+    // (timeline.hbs L4, L34, L84) and divides every era band and scrollbar dot by it. A
+    // total of zero or less therefore collapses the columns, resolves every percentage to
+    // Infinity or NaN so the colour gradient silently fails, and kills scrolling — while the
+    // era and event cards, being absolutely positioned by pixel offset, still paint. The
+    // result looks broken rather than empty, which is why nothing about it reads as an error.
+    const totalHeight = Array.from(eraHeights.values()).reduce((a, b) => a + b, 0);
+    if (totalHeight <= 0) {
+      const culprits = eras
+        .filter((e: any) => (eraHeights.get(e) ?? 0) < 0)
+        .map((e: any) => `"${e.name}" (${eraHeights.get(e)}px)`);
+      layoutWarnings.push(
+        `The whole axis collapses: total height is ${totalHeight}px. Simple Quest sets ` +
+          `height:${totalHeight}px on all three timeline columns and divides every era band ` +
+          `and scrollbar position by it, so the gradient resolves to Infinity/NaN and fails ` +
+          `silently and the view cannot scroll. Cards still paint at their pixel offsets, so ` +
+          `it looks broken rather than empty.` +
+          (culprits.length > 0
+            ? ` Negative contribution from ${culprits.join(', ')} — an era with no eraEnd is ` +
+              `sized as (0 - eraStart).`
+            : '')
+      );
     }
 
     const gmOrphanIds = new Set(gm.orphaned.map((e: any) => e.id));
@@ -4475,6 +4512,7 @@ export class FoundryDataAccess {
       config,
       eraCount: eras.length,
       eventCount: events.length,
+      totalHeight,
       eras: eras.map((e: any) => ({
         id: e.id,
         uuid: e.uuid,
@@ -4484,6 +4522,7 @@ export class FoundryDataAccess {
         color: e.system?.color ?? null,
         label: e.system?.label ?? null,
         eventsPlaced: gm.placed.filter(x => x.era === e).length,
+        heightPx: eraHeights.get(e) ?? null,
         playerVisible: playerVisible(e),
       })),
       events: gm.placed.map(({ ev, era }) => ({
