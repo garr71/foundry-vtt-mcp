@@ -2777,9 +2777,18 @@ link, a visible embarrassment — so until then the tools should treat `@time` a
 behaviour are still moving, and a document written against a moving target is a second source of
 truth that drifts.
 
-**Franklin's framing (2026-08-17):** the document lives in the **dev vault** as the single source of
-truth; he propagates it to the pf2e game vault or references it cross-vault so it never forks.
-Suggested home: `Z:\Obsidian Vaults\FoundryDevVault\01 - MCP Server\Simple Quest Tooling — GM Guide.md`.
+**Home, corrected 2026-08-20.** The earlier framing (2026-08-17) put the document in the **dev
+vault** as the single source of truth, propagated or cross-referenced into the pf2e game vault so it
+never forks. **Superseded, because it assumed the document needed to exist in both places.** The two
+vaults have different jobs: `Z:\Obsidian Vaults\FoundryDevVault` (on the NAS) is dev-only research,
+architecture and session logs, while `C:\Vaults\PF2eFoundryVault` is where play happens. The GM
+guide is a **play** artifact with exactly one consumer (the play session), so:
+
+**It lives in the play vault, as a skill: `C:\Vaults\PF2eFoundryVault\.claude\skills\<name>`.** Written
+once, no copy, no link. `.claude/skills/session-start` already exists there, so this is a second
+skill in a working directory, not new plumbing. The play vault is also local and git-versioned,
+which the dev vault is not — a guide on the NAS would make a live session depend on the NAS being
+awake.
 
 ##### Why this is needed at all — MCP tools are self-describing, but only per tool
 
@@ -2826,12 +2835,21 @@ Two consequences for how the document gets written:
    lifecycle up front, the traps near the tools they apply to. One document, one audience posture:
    "someone about to do Simple Quest work", human or assistant.
 
-⚠️ **Open dependency, resolve before writing:** whichever assistant acts as the GM needs **filesystem
-read access to the vault path**. Claude Code reads `CLAUDE.md` and supports skills natively. Claude
-Desktop does neither, and cannot read a vault file at all unless a filesystem MCP server is connected
-alongside the Foundry one. **Confirm which environment the GM AI runs in before choosing the pointer
-mechanism** — if it is Desktop with only the Foundry MCP server, a pointer cannot be followed and the
-content has to reach it another way.
+✅ **Open dependency — RESOLVED 2026-08-20.** It asked which assistant acts as the GM, because Claude
+Desktop cannot read a vault file at all without a filesystem MCP server alongside the Foundry one,
+and a pointer it cannot follow is no delivery mechanism.
+
+**Answer: Claude Desktop is the _test harness only_. Real play is `claude` (Claude Code) spawned from
+`C:\Vaults\PF2eFoundryVault`,** which reads `CLAUDE.md` natively, supports skills, and has the vault
+as its cwd. Both mechanisms proposed above therefore work, including the stronger one (a skill that
+_mandates_ the read). Verified on disk in that vault: `.mcp.json` wires the `foundry-mcp` server to
+the installed `index.bundle.cjs` on port 31415; `.claude/settings.local.json` allows
+`mcp__foundry-mcp__*` and `Read(//c/Vaults/**)`; `.claude/skills/session-start` already exists.
+
+Two consequences beyond 7z, both recorded where they belong: the **`Z:` drive is not in that allow
+list** (so a dev-vault pointer would prompt every session, on top of the NAS dependency), and
+**every conclusion in this plan phrased around "Claude Desktop queries the tool list once per
+session" describes the test harness, not play.**
 
 ##### What the document must NOT do
 
@@ -2842,12 +2860,19 @@ project keeps finding. Part B links to the tool list; it does not mirror it.
 **Maintenance rule: if the document and the tool descriptions disagree, the tool descriptions win.**
 They are what the model actually reads. The document is derived, not authoritative.
 
-##### Note on cross-vault referencing
+##### ~~Note on cross-vault referencing~~ — struck 2026-08-20, the problem does not exist
 
-Obsidian `[[wikilinks]]` do not resolve across vaults. Cross-vault reference needs an
-`obsidian://open?vault=…&file=…` URI, or a filesystem junction/symlink so the same file appears in
-both vaults. Franklin's call which; recording it so the "single source of truth" intent is not defeated
-by a link that silently does not work.
+This section weighed `obsidian://open?vault=…&file=…` URIs against a filesystem junction or symlink,
+since Obsidian `[[wikilinks]]` do not resolve across vaults. **All of it was downstream of the wrong
+premise** that the guide had to appear in both vaults. It does not: the dev vault is for development,
+the play vault is for playing, and the guide is a play artifact. One file, one vault, nothing to
+link. Kept as a stub because the reasoning was recorded here and its absence would read as an
+oversight.
+
+Two facts worth keeping, should anything else ever need to cross: wikilinks really do not resolve
+across vaults, and **`Z:` is a NAS share (`\\MetalGear-NAS\NASDrive`), so `mklink /J` cannot target it
+at all** — junctions do not accept remote paths. A directory symlink can, but needs elevation plus
+remote-to-local symlink evaluation enabled.
 
 #### 7b-deferred — the rest of the Simple Quest surface
 
@@ -3448,3 +3473,28 @@ npm run bundle:server && cp packages/mcp-server/dist/backend.bundle.cjs \
 If the tool list is still stale after a restart, rename the server key in
 `claude_desktop_config.json` (e.g. `foundry-mcp-bridge` → `foundry-mcp-bridge-v2`) to force
 Claude Desktop to treat it as a new server.
+
+### ⚠️ Deploy **both** stdio wrappers — test and play launch different files (found 2026-08-20)
+
+There are two copies of the stdio wrapper in the installed `dist/`, and the two clients do not share
+one:
+
+| Client                    | Launches                | Configured in                          |
+| ------------------------- | ----------------------- | -------------------------------------- |
+| Claude Desktop (**test**) | `dist/index.cjs`        | `claude_desktop_config.json`           |
+| Claude Code (**play**)    | `dist/index.bundle.cjs` | `C:\Vaults\PF2eFoundryVault\.mcp.json` |
+
+They are **separate files, not a shim and a target** — same 484,749 bytes and same md5
+(`db24f629632493042f43502f79c0a3a7`) as of 2026-08-20, but with **mtimes three days apart**:
+`index.cjs` Aug 15 16:04, `index.bundle.cjs` Aug 18 00:15. The Aug 18 deploy refreshed only the
+bundle and got away with it **because the wrapper had not changed in between**, not because one copy
+is derived from the other.
+
+So the existing note ("`index.bundle.cjs` too, if it changed") has it backwards: **the bundle is the
+one live play sessions run.** Copy both, every time, or the day the wrapper does change the stale
+copy is whichever client was not tested — and since Desktop is the test harness, the breakage lands
+in **play**. Same shape as the matched-pair rule, one layer up: the pair here is _wrapper vs
+wrapper_, not module vs server.
+
+The backend is unaffected — both wrappers connect to the same singleton on control port 31414, so
+`backend.bundle.cjs` has one copy and one truth.
