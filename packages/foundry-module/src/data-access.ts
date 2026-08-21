@@ -4465,6 +4465,58 @@ export class FoundryDataAccess {
       }
     }
 
+    // ---- the running pixel cursor, reproduced from L76-90 ------------------------------
+    // `startPx` is the PREVIOUS era's `endPx`, so a negative-height era does not merely
+    // shrink the axis: it drags the cursor backwards, and every era after it is drawn
+    // higher up, on top of the eras before it. Confirmed on screen 2026-08-21.
+    const eraLayout = new Map<any, { startPx: number; endPx: number; displayedEnd: unknown }>();
+    let cursor = 0;
+    eras.forEach((era: any, i: number) => {
+      const startPx = cursor;
+      const endPx = startPx + (eraHeights.get(era) ?? 0);
+      cursor = endPx;
+      // L84 uses `||`, not `??`, so a stored 0 is treated as absent here too. This value is
+      // the LABEL only; containment at L117 reads the raw `eraEnd`.
+      const displayedEnd = era.system?.eraEnd || eras[i + 1]?.system?.eraStart;
+      eraLayout.set(era, { startPx, endPx, displayedEnd });
+    });
+
+    for (let i = 0; i < eras.length; i++) {
+      const era = eras[i];
+      const l = eraLayout.get(era)!;
+      if (l.endPx >= l.startPx) continue;
+      const after = eras
+        .slice(i + 1)
+        .map((e: any) => `"${e.name}" now starts at ${eraLayout.get(e)!.startPx}px`);
+      layoutWarnings.push(
+        `Era "${era.name}" is drawn from ${l.startPx}px down to ${l.endPx}px — inverted, ` +
+          `because its height is ${eraHeights.get(era)}px. L86 sets every era's top to the ` +
+          `previous era's endPx, so the cursor runs BACKWARDS from here and everything after ` +
+          `it is repositioned over the eras before it` +
+          (after.length > 0 ? `: ${after.join('; ')}.` : '.')
+      );
+    }
+
+    // The label an era shows can differ from the end it actually enforces.
+    for (const era of eras) {
+      const l = eraLayout.get(era)!;
+      const stored = era.system?.eraEnd;
+      if (stored == null && l.displayedEnd === undefined) {
+        layoutWarnings.push(
+          `Era "${era.name}" has no eraEnd and no era follows it, so L84 has nothing to fall ` +
+            `back to and the card renders its end as "NaN".`
+        );
+      } else if (l.displayedEnd !== undefined && stored !== l.displayedEnd) {
+        layoutWarnings.push(
+          `Era "${era.name}" DISPLAYS as ending at ${l.displayedEnd} but its stored eraEnd is ` +
+            `${JSON.stringify(stored)}. L84 falls back to the next era's eraStart using "||" ` +
+            `(not "??", so a stored 0 counts as absent), while containment at L117 reads the ` +
+            `raw value. The card looks like an ordinary bounded era while capturing ` +
+            `${stored == null ? 'nothing at or above year 0' : `nothing above ${stored}`}.`
+        );
+      }
+    }
+
     // The axis itself. Simple Quest writes `height: <totalHeight>px` onto all three columns
     // (timeline.hbs L4, L34, L84) and divides every era band and scrollbar dot by it. A
     // total of zero or less therefore collapses the columns, resolves every percentage to
@@ -4523,6 +4575,9 @@ export class FoundryDataAccess {
         label: e.system?.label ?? null,
         eventsPlaced: gm.placed.filter(x => x.era === e).length,
         heightPx: eraHeights.get(e) ?? null,
+        startPx: eraLayout.get(e)?.startPx ?? null,
+        endPx: eraLayout.get(e)?.endPx ?? null,
+        displayedEnd: eraLayout.get(e)?.displayedEnd ?? null,
         playerVisible: playerVisible(e),
       })),
       events: gm.placed.map(({ ev, era }) => ({

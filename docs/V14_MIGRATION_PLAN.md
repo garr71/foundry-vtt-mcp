@@ -2531,7 +2531,7 @@ name, before trusting a result.
 #### ▶️ START HERE NEXT SESSION (updated 2026-08-21, end of Session 14)
 
 **State:** Phase 7a complete; **7b.0** done (10/10), the **silent-coercion defect** found in
-pre-flight 3 fixed (11/11), and **7b.1 `get-timeline` done** (17/17). **57 tools.** All three 7b.1
+pre-flight 3 fixed (11/11), and **7b.1 `get-timeline` done** (20/20). **57 tools.** All three 7b.1
 pre-flights are closed. Nothing is half-built, and `master` is level with `origin/master` through
 `c114d43` (the 7b.1 commit follows it).
 
@@ -2822,14 +2822,15 @@ Checked for a second door: **`set-quest-progress` is not affected.** It never re
 `validateSystemData`, but it validates `status` against its own explicit allowlist, so `5`, `1.5` and
 `"bogus"` were already refused with the status left untouched.
 
-##### ✅ 7b.1 — `get-timeline` **DONE 2026-08-21, gate 17/17 (56 → 57)**
+##### ✅ 7b.1 — `get-timeline` **DONE 2026-08-21, gate 20/20 (56 → 57)**
 
 Reproduces `Timeline._prepareContext` rather than approximating it, coercions included, because the
 tool's job is to report what the module _does_. Returns eras sorted by `eraStart`, events sorted by
 `year` each resolved to its containing era, **`orphanedEvents` with a reason per event**, the six axis
 flags with Simple Quest's own defaults, every page `uuid`, `layoutWarnings`, and a `playerView`.
 
-**Four things building it turned up that the source-reading passes had not:**
+**Six things building it turned up. Findings 3, 5 and 6 came out of the **UI confirmation step**,
+after the API gate already read 15/15 — none of them were reachable from the tool response alone:**
 
 1. **A journal is a timeline only by folder membership — there is no marker flag.**
    `SimpleQuest.js` L965-975 collects the `timeline` special directory recursively; nothing else
@@ -2864,11 +2865,27 @@ flags with Simple Quest's own defaults, every page `uuid`, `layoutWarnings`, and
    it appears. `playerView.orphanedForPlayersOnly` reports it; gate check 14 sets the trap up live
    (journal + one event visible, its era hidden) and check 15 tears it back down.
 
+5. **A negative era drags the layout cursor backwards, so later eras are drawn on top of
+   earlier ones.** L86 is `startPx = erasData[i - 1]?.endPx ?? 0` — each era's top is the
+   _previous_ era's `endPx`. The endless era runs `3000px → 0px` (inverted), so the era after it
+   starts at **0px** and is painted over the first era. Found on screen: the axis appeared to
+   "keep going" past the last era because that era's card had been drawn back at the top. This is
+   distinct from the total-height collapse in finding 3 — the total was a healthy 6000px here and
+   the positions were still wrong.
+
+6. **An era with no `eraEnd` displays the _next_ era's start as its end, so it looks bounded.**
+   L84 is `eraEnd || nextEra?.system.eraStart` — a label-only fallback, while containment at L117
+   reads the raw `eraEnd`. On screen the card read **"Gate Era NoEnd — 300 AC to 400 AC"**: an
+   ordinary bounded era that captures nothing. Because the fallback uses `||` and not `??`, a
+   stored `0` triggers it too, so an era legitimately ending at year zero also displays somebody
+   else's number. `get-timeline` now returns `displayedEnd` alongside `eraEnd` and warns when they
+   differ. This was a source-read claim from the 2026-08-17 pre-flight; it is now observed.
+
 **The L68-vs-L117 sizing gap is not an edge case.** Three of the fixture's four eras report it, because
 any event dated on a boundary is counted by the inclusive sizing pass and then dropped by the
 exclusive placement pass. The warning names the era and the count.
 
-##### Gate 17/17, live, 2026-08-21
+##### Gate 20/20, live, 2026-08-21
 
 Expected values were **derived by hand from L117 before running**, so the gate asserts predictions
 rather than echoing the tool. The fixture uses **adjacent** eras (−100..0, 0..100, 100..200, plus
@@ -2876,7 +2893,7 @@ rather than echoing the tool. The fixture uses **adjacent** eras (−100..0, 0..
 one, which is the whole point of checks 1-3.
 
 | #     | Check that can actually fail                                                                                                                                                                                          |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | ---------------------------------- |
 | 1     | `orphanedEvents` is exactly `[OnEnd(200), Outside(250)]` — and `OnStart(100)` is **not** in it                                                                                                                        |
 | 2     | the `eraEnd`-dated event's reason names the exclusive bound _and_ the era it just missed                                                                                                                              |
 | 3     | year 100 lands in `Gate Era A` (100..200), **not** `Gate Era Mid` (0..100) — `eraStart` is inclusive                                                                                                                  |
@@ -2890,6 +2907,16 @@ one, which is the whole point of checks 1-3.
 | 12    | `journalName` matches exactly and **refuses a substring**                                                                                                                                                             |
 | 13-15 | `playerView` empty while hidden; the player-only orphan appears when the trap is set; and clears when it is torn down                                                                                                 |
 | 16-17 | shrinking one era to zero length drops `totalHeight` from 6000 to **0** and raises the axis-collapse warning; restoring it clears the warning. Away-and-back, because a warning that is always present proves nothing |
+| 18    | the inverted era reports `3000px → 0px`, and the warning **names the era pushed back to 0px** — the positions are wrong even though the total height is healthy                                                       |
+| 19    | the endless era reports `displayedEnd: 400` against `eraEnd: null`                                                                                                                                                    |
+| 20    | **branch not otherwise taken:** an era whose displayed end already equals its stored end must **not** be flagged. `Gate Era Zero` stores `0` and displays `0`, so the `                                               |     | ` fallback lands on the same value |
+
+⚠️ **A harness lesson worth keeping.** Checks 18 and 20 failed on their first run for a reason that
+had nothing to do with the tool: they ran a regex over the layout warnings **joined into one
+string**, so `Gate Era Zero.*DISPLAYS as ending` matched "Gate Era Zero" from one warning and
+"DISPLAYS as ending" from a different one, and reported a flag that was never raised. Match within a
+single element, never across a joined collection — a `.*` spanning a separator will pair fragments
+that never co-occurred.
 
 The harness opens with a **freshness probe** that exits rather than report on a browser still running
 the old module. Same pattern as the coercion gate, and worth keeping in every module-side gate.
@@ -2903,7 +2930,7 @@ live-schema validation has no equivalent — instead each _caller_ declares its 
 and the writer refuses anything outside it. Counter ids are arbitrary by design and are the
 exception, scoped to the `counters` object.
 
-**7b.1 — `get-timeline`. DONE 2026-08-21, gate 17/17 (56 -> 57).** Read a timeline journal exactly as `Timeline._prepareContext` does: eras
+**7b.1 — `get-timeline`. DONE 2026-08-21, gate 20/20 (56 -> 57).** Read a timeline journal exactly as `Timeline._prepareContext` does: eras
 sorted by `eraStart`, events sorted by `year`, each event resolved to its containing era — and
 **`orphanedEvents` listed explicitly**, with the reason (no era covers the year / era has a null
 `eraEnd` / year equals an exclusive `eraEnd`). Read-only, and it is the tool that makes the headline
