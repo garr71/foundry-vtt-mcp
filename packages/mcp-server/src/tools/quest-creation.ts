@@ -306,6 +306,17 @@ export class QuestCreationTools {
         ...(request.folderName ? { folderName: request.folderName } : {}),
       });
 
+      // A refusal from the module is a policy outcome, not an exception. Returned
+      // verbatim rather than thrown, because ErrorHandler.handleToolError replaces a
+      // thrown message with a generic template and for a refusal the message IS the
+      // deliverable. Generalised in the @time cycle: the narrow `rejected`-only version
+      // below covered one of four call sites, so a forbidden-enricher refusal came back
+      // to the caller as "Invalid request or missing data".
+      if (result && result.success === false && result.refused) {
+        this.logger.info('Module refused journal creation', { reason: result.reason });
+        return result;
+      }
+
       if (!result || result.error) {
         throw new Error(result?.error || 'Failed to create quest journal');
       }
@@ -395,6 +406,17 @@ export class QuestCreationTools {
         }
       );
 
+      // A refusal from the module is a policy outcome, not an exception. Returned
+      // verbatim rather than thrown, because ErrorHandler.handleToolError replaces a
+      // thrown message with a generic template and for a refusal the message IS the
+      // deliverable. Generalised in the @time cycle: the narrow `rejected`-only version
+      // below covered one of four call sites, so a forbidden-enricher refusal came back
+      // to the caller as "Invalid request or missing data".
+      if (updateResult && updateResult.success === false && updateResult.refused) {
+        this.logger.info('Module refused NPC link write', { reason: updateResult.reason });
+        return updateResult;
+      }
+
       if (!updateResult || updateResult.error) {
         throw new Error('Failed to update journal with NPC link');
       }
@@ -448,6 +470,17 @@ export class QuestCreationTools {
           type: request.pageType,
           system: request.pageSystem,
         });
+
+        // A refusal from the module is a policy outcome, not an exception. Returned
+        // verbatim rather than thrown, because ErrorHandler.handleToolError replaces a
+        // thrown message with a generic template and for a refusal the message IS the
+        // deliverable. Generalised in the @time cycle: the narrow `rejected`-only version
+        // below covered one of four call sites, so a forbidden-enricher refusal came back
+        // to the caller as "Invalid request or missing data".
+        if (result && result.success === false && result.refused) {
+          this.logger.info('Module refused new page write', { reason: result.reason });
+          return result;
+        }
 
         if (!result) {
           throw new Error('Failed to create new journal page');
@@ -540,6 +573,17 @@ export class QuestCreationTools {
           content: request.newContent,
           pageId: request.pageId,
         });
+
+        // A refusal from the module is a policy outcome, not an exception. Returned
+        // verbatim rather than thrown, because ErrorHandler.handleToolError replaces a
+        // thrown message with a generic template and for a refusal the message IS the
+        // deliverable. Generalised in the @time cycle: the narrow `rejected`-only version
+        // below covered one of four call sites, so a forbidden-enricher refusal came back
+        // to the caller as "Invalid request or missing data".
+        if (result && result.success === false && result.refused) {
+          this.logger.info('Module refused content replacement', { reason: result.reason });
+          return result;
+        }
 
         if (!result || result.error || !result.success) {
           throw new Error(result?.error || 'Failed to replace journal content');
@@ -686,6 +730,15 @@ export class QuestCreationTools {
         content: updatedContent,
         pageId: resolvedPageId,
       });
+
+      // A refusal from the module is a policy outcome, not an exception — see the note at
+      // the other call sites. This is the fifth of five, and the one the "progress" update
+      // path uses; missing it sent a forbidden-enricher refusal back as "An unexpected
+      // error occurred".
+      if (result && result.success === false && result.refused) {
+        this.logger.info('Module refused quest journal update', { reason: result.reason });
+        return result;
+      }
 
       if (!result) {
         throw new Error('Failed to update quest journal: No response from Foundry');

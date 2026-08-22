@@ -5337,6 +5337,9 @@ export class FoundryDataAccess {
       };
     }
 
+    const forbidden = this.forbiddenEnricherRefusal([{ label: 'text', value: request.text }]);
+    if (forbidden) return forbidden;
+
     // Validate what the caller sent BEFORE merging our defaults in, so a rejection names
     // their key and never one of ours.
     const check = this.validateSystemData(request.type, request.system);
@@ -5605,6 +5608,9 @@ export class FoundryDataAccess {
       };
     }
 
+    const forbidden = this.forbiddenEnricherRefusal([{ label: 'text', value: request.text }]);
+    if (forbidden) return forbidden;
+
     const check = this.validateSystemData(page.type, system);
     if (!check.valid) {
       return {
@@ -5817,6 +5823,11 @@ export class FoundryDataAccess {
     appendObjectives?: string[] | undefined;
   }): Promise<Record<string, unknown>> {
     this.validateFoundryState();
+
+    const forbiddenAppend = this.forbiddenEnricherRefusal([
+      { label: 'appendObjectives', value: request.appendObjectives },
+    ]);
+    if (forbiddenAppend) return forbiddenAppend;
 
     const permissionCheck = permissionManager.checkWritePermission('createActor', { quantity: 1 });
     if (!permissionCheck.allowed) {
@@ -6643,6 +6654,61 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Refuse `@time` in anything written into a page body.
+   *
+   * **Franklin's decision, 2026-08-22: Simple Timekeeping is not being adopted, so `@time` is
+   * permanently forbidden output rather than deferred.** He enabled the module to evaluate
+   * it, found that its "Sync Weather & Darkness" option had written darkness levels onto the
+   * scenes it touched, and declined it.
+   *
+   * Simple Quest's enricher gates on `ui.simpleTimekeeping` and, when that is absent, writes
+   * the literal string "Simple Timekeeping & Calendar Not Installed" into the rendered page
+   * (`enrichers.js` L36-37). That is player-visible body text, not a broken link, which is
+   * why this is refused rather than warned: unlike the timeline containment guard, no
+   * ordering of work makes it render correctly in this world.
+   *
+   * ⚠️ **This encodes a decision, and says so — it does not pretend to detect one.** Simple
+   * Timekeeping's own config makes exactly that mistake: `config.js` L202 is
+   * `if (game.system.id === "pf2e")`, a hardcoded branch that presents itself as a finding
+   * about the game system and will keep firing after the claim stops being true. So the
+   * refusal below reports the module's *actual* current state separately from the policy,
+   * and the two never get conflated.
+   */
+  private forbiddenEnricherRefusal(
+    texts: Array<{ label: string; value: unknown }>
+  ): Record<string, unknown> | null {
+    const found: string[] = [];
+    for (const t of texts) {
+      const values = Array.isArray(t.value) ? t.value : [t.value];
+      for (const v of values) {
+        if (typeof v !== 'string') continue;
+        // Deliberately looser than the module's own pattern: a malformed `@time[...` never
+        // matches the enricher and is rendered as raw text, which is just as visible.
+        for (const m of v.matchAll(/@time\[[^\]]*\]?/g)) found.push(`${t.label}: ${m[0]}`);
+      }
+    }
+    if (found.length === 0) return null;
+
+    const stActive = game.modules?.get('simple-timekeeping')?.active === true;
+    return {
+      success: false,
+      refused: true,
+      reason: 'forbidden-enricher',
+      rejected: found,
+      message:
+        `Refused: @time is forbidden output in this world by project decision (2026-08-22) — ` +
+        `Simple Timekeeping was evaluated and declined. Found ${found.length} occurrence(s): ` +
+        `${found.join(', ')}. Nothing was written. ` +
+        (stActive
+          ? `Note that the module is currently ACTIVE, so this text would render right now; ` +
+            `the refusal is the decision, not a detection. Revisit the decision if it has changed.`
+          : `The module is not active, so Simple Quest would render the literal text ` +
+            `"Simple Timekeeping & Calendar Not Installed" into the page for players to read.`) +
+        ` Write the date as plain prose instead.`,
+    };
+  }
+
+  /**
    * Validate a `system` payload against the live data model, by key **and** by value.
    *
    * The value half exists because Foundry cleans before it validates:
@@ -6856,6 +6922,15 @@ export class FoundryDataAccess {
     message?: string | undefined;
   }> {
     this.validateFoundryState();
+
+    const forbiddenBody = this.forbiddenEnricherRefusal([
+      { label: 'content', value: request.content },
+      {
+        label: 'additionalPages',
+        value: (request.additionalPages ?? []).map(pg => pg.content),
+      },
+    ]);
+    if (forbiddenBody) return forbiddenBody;
 
     // Use permission system for journal creation
     const permissionCheck = permissionManager.checkWritePermission('createActor', {
@@ -7288,8 +7363,30 @@ export class FoundryDataAccess {
     rejected?: string[] | undefined;
     accepted?: string[] | undefined;
     message?: string | undefined;
+    // A refusal has to carry these two out to the server layer, which decides whether to
+    // pass the message through or throw a generic one over it. Dropping them to satisfy the
+    // narrower shape is what made the first attempt at this guard report "An unexpected
+    // error occurred" for the one tool that needed the message most.
+    refused?: boolean | undefined;
+    reason?: string | undefined;
   }> {
     this.validateFoundryState();
+
+    const forbiddenContent = this.forbiddenEnricherRefusal([
+      { label: 'content', value: request.content },
+    ]);
+    if (forbiddenContent) {
+      // This method declares a narrower return shape than the other writers, so the
+      // refusal is mapped onto it field by field — including refused/reason, which the
+      // server layer keys on.
+      return {
+        success: false,
+        refused: true,
+        reason: forbiddenContent.reason as string,
+        rejected: forbiddenContent.rejected as string[],
+        message: forbiddenContent.message as string,
+      };
+    }
 
     // Use permission system for journal updates - treating as createActor permission level
     const permissionCheck = permissionManager.checkWritePermission('createActor', {

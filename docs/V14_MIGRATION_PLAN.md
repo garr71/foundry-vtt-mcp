@@ -3133,7 +3133,18 @@ pre-flight 3 showed is not orphaned at all but silently lands in whatever era sp
 counters in event bodies really do write to the era, the tool must target the page the enricher
 resolves against, not the page the text lives on, and say which.
 
-**7b.5 — `@time`, LAST.** Requires **Simple Timekeeping & Calendar**, not installed.
+**7b.5 — `@time`. ❌ CANCELLED 2026-08-22, not deferred.** Franklin installed Simple Timekeeping to
+evaluate it and declined it: its "Sync Weather & Darkness" option wrote darkness levels onto every
+scene it touched, and disabling the module left those values behind (his Landing scene needed
+`environment.darknessLevel` reset to 0 by hand). Separately, pf2e 8.4.1 registers no world calendar —
+`worldCalendarClass` appears nowhere in the system and its only `CONFIG.time` touch is
+`roundTime = 6` — so the module's own warning about desynchronisation was factually right, even
+though it is hardcoded on `game.system.id === "pf2e"` rather than detected.
+
+**`@time` is therefore permanently forbidden output, and now enforced rather than documented.** All
+five body-writing paths refuse it, gate 8/8. See the enforced-policy note in `CLAUDE.md`.
+
+_Original entry:_ Requires **Simple Timekeeping & Calendar**, not installed.
 ⛔ **Do not start** until it is installed and its source has been read. Emitting `@time` without it
 renders the literal text "Simple Timekeeping & Calendar Not Installed" into the page — not a broken
 link, a visible embarrassment — so until then the tools should treat `@time` as forbidden output.
