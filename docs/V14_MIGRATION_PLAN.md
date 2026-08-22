@@ -3178,7 +3178,47 @@ link, a visible embarrassment — so until then the tools should treat `@time` a
 - Confirm a module is installed before scheduling work against it (7c). `@time` is why this phase
   ends where it does.
 
-#### 7z — GM-facing usage documentation 📖 ⬜ (agreed 2026-08-17, after 7b's tools ship)
+#### 7z — GM-facing usage documentation 📖 ✅ **DONE 2026-08-22**
+
+**Delivered:** `C:\Vaults\PF2eFoundryVault\01 - Procedures\Simple Quest Procedure.md`, 310 lines,
+covering all 14 Simple Quest and journal tools. The pointer in that vault's `CLAUDE.md` was updated
+to match.
+
+##### ⚠️ Two corrections to everything written below, both from Franklin on 2026-08-22
+
+**1. It is a plain file, not a skill.** This section spent two revisions deciding it should live in
+`.claude/skills/`. Franklin's question was simply _why_ — and there was no good answer. The play
+vault's `CLAUDE.md` is loaded automatically every session and already carried the pointer, so a skill
+was machinery in front of a file that gets read anyway. The pointer mechanism this section settled on
+was right; the skill wrapper around it was not.
+
+**2. It is organized BY TOOL.** This section argued for organising "for a reader skimming to the
+answer" and explicitly rejected a Part A / Part B split. Franklin's framing is sharper: the consumer
+is an assistant about to make one specific call, so the lookup path should be _find the tool, read
+its entry_. The tool reference is now the spine of the document and the conceptual material sits
+behind it as shared sections the entries point into.
+
+**What survived unchanged, and mattered:** the no-parameters rule. Each entry carries only what the
+tool cannot say about itself — sequencing, silent failure modes, why a default contradicts the
+module. Parameters arrive with the tool in its `inputSchema`; a second copy in the vault would drift,
+which is the failure this project keeps finding. The precedence rule survived too: tool descriptions
+win.
+
+##### A third thing this section did not anticipate
+
+**Most of the document already existed.** Franklin had written `Simple Quest Procedure.md` and wired
+the `CLAUDE.md` pointer some days earlier. 7z was therefore not "write a guide" but "bring a good
+guide up to date and restructure it" — the file was a week stale: it listed 5 tools as built and 3 as
+unbuilt, told the reader to check the timeline by eye because `get-timeline` did not exist, and
+described `@time` as blocked on an install rather than cancelled.
+
+**Content added from this week:** the timeline's four silent-orphan paths plus the two layout ones
+(negative-height eras, the borrowed end date), the counter split brain with its observed evidence,
+the value-coercion guard, the timeline-folder rule, and `@time`'s cancellation and enforcement.
+
+---
+
+##### Original design notes (superseded in the two ways above, kept for the reasoning)
 
 **Trigger:** once 7b's tools are built and gate-passed (56 → 59). Not before — tool descriptions and
 behaviour are still moving, and a document written against a moving target is a second source of
