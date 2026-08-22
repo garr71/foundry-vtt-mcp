@@ -2582,7 +2582,7 @@ fixtures and there is deliberately **no journal-delete tool**:
 
 ---
 
-#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 + 7b.2 done 2026-08-21, 7b.3 done 2026-08-22, 7b.4 next**
+#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 + 7b.2 done 2026-08-21, 7b.3 + 7b.4 done 2026-08-22; only 7b.5 (@time, blocked) remains**
 
 > **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
 > surface listed further down: **`event`/`era` timeline** (the campaign involves history and dated
@@ -3032,6 +3032,53 @@ The response also runs `analyseTimeline` and reports the resulting `axis.totalHe
 7b.1 (20/20) and 7b.2 (9/9) were re-run afterwards as the regression check on extracting
 `resolveTimelineJournal`.
 
+##### ✅ 7b.4 — `set-quest-counter` **DONE 2026-08-22, gate 12/12 (58 → 59)**
+
+Sets one `@COUNT` / `@REPUTATION` value in `flags['simple-quest'].counters[id]`. `journalId` and
+`pageId` are both **required** and the target is never inferred, for the reason below. Omitting
+`value` reads the current state instead of writing a default.
+
+###### The split brain, re-verified from source on 2026-08-22 and confirmed unchanged
+
+| View                     | Call site                    | `relativeTo` | Reads from  |
+| ------------------------ | ---------------------------- | ------------ | ----------- |
+| Timeline, era body       | `Timeline.js` L106           | `era`        | the era     |
+| **Timeline, event body** | **`Timeline.js` L130**       | **`era`**    | **the era** |
+| The event's own sheet    | `JournalPageHelpers.js` L154 | `this.page`  | the event   |
+| Search preview           | `Search.js` L155             | `p`          | the event   |
+
+So one `@COUNT[gold]{10}` written in an event body has **two** storage locations depending on who is
+looking. The tool cannot infer a target, so it demands one, and writing to an event page is
+**warned about rather than refused** — that page is the correct target for two of the four views.
+The warning names the containing era and says the value will differ on the timeline.
+
+Two further facts read from source this cycle:
+
+- **`@COUNT` and `@REPUTATION` share one `counters` object** (`enrichers.js` L128 and L159), so they
+  share an id namespace on a page. `@COUNT[gold]` and `@REPUTATION[gold]` are the same counter.
+- **The maximum lives in the body text, not with the value.** `@COUNT[gold]{10}` declares the 10, and
+  `main.js` L149 is `(value + 1) % (count + 1)` — so a stored value above the declared max renders as
+  `(15 / 3)` and the _next click wraps to 0_. The tool parses the body with Simple Quest's own two
+  regexes, reports what each id declares, and warns when a value falls outside it.
+
+###### Gate 12/12, live, 2026-08-22
+
+Its fixture declares the counter in the **event** body, which is the only arrangement that can
+exercise the split.
+
+| #     | Check that can actually fail                                                                                                                       |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | omitting `value` reports state and writes nothing                                                                                                  |
+| 2-3   | a plain write on a single-view page warns about **nothing**, and moves away (2→3) and back                                                         |
+| 4     | **the split brain:** writing on an event page succeeds _and_ warns that the timeline reads its era, naming the era                                 |
+| 5     | the era-scoped collision is stated too, not just the redirect                                                                                      |
+| 6     | **branch not otherwise taken:** the same id written to the **era** is a different counter — era 9, event still 4 — and raises **no** split warning |
+| 7     | an id declared nowhere in that page's body is stored _and_ warned about, naming the page where it is declared                                      |
+| 8     | a value above the declared max is stored, warned, and the wrap-to-zero explained                                                                   |
+| 9     | `@REPUTATION[guild]{0,5}` is parsed for its own min/max and shares the object with `@COUNT`                                                        |
+| 10    | writing one counter leaves the other intact (the 7a.5 merge trap, per-leaf paths)                                                                  |
+| 11-12 | a dotted id and a non-numeric value are refused with nothing written; an unknown `pageId` lists the real ones                                      |
+
 ##### Cycles
 
 **7b.0 — Flags foundation (no new tools). ✅ DONE, gate passed 10/10 + UI confirmed 2026-08-18.** A write path for `flags['simple-quest']` on both
@@ -3061,7 +3108,7 @@ pre-flight 3 showed is not orphaned at all but silently lands in whatever era sp
 **7b.3 — `set-timeline-config`. DONE 2026-08-22, gate 12/12 (57 -> 58); the 7b.0 debt is discharged.** The six journal flags. Numbers validated (`timeScale > 0`),
 `content` constrained to its three choices.
 
-**7b.4 — `set-quest-counter`.** `@COUNT` / `@REPUTATION` state in page flags
+**7b.4 — `set-quest-counter`. DONE 2026-08-22, gate 12/12 (58 -> 59).** `@COUNT` / `@REPUTATION` state in page flags
 `['simple-quest'].counters[id]`. Blocked on resolving the `relativeTo: era` question above — if
 counters in event bodies really do write to the era, the tool must target the page the enricher
 resolves against, not the page the text lives on, and say which.

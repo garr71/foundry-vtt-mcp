@@ -55,6 +55,33 @@ export class SimpleQuestTools {
         },
       },
       {
+        name: 'set-quest-counter',
+        description:
+          'Set one Simple Quest counter value (the @COUNT and @REPUTATION state) on a page. Both journalId and pageId are REQUIRED and the tool never infers the target, because an @COUNT written in an event body has no single storage location: the timeline reads it from the event\'s ERA, while the event\'s own sheet and the search preview read it from the event. Writing to an event page is warned about, not refused, since that is the correct target for two of those views. @COUNT and @REPUTATION share one id namespace on a page. The maximum is declared in the body text, not stored with the value, so a value above it renders as \"(15 / 10)\" and the next click wraps to zero. Omit \"value\" to read the current state and see where the id is declared, without writing.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            journalId: { type: 'string', description: 'Journal containing the page.' },
+            pageId: {
+              type: 'string',
+              description:
+                'The page whose counters flag is written. Required: the target is never guessed.',
+            },
+            counterId: {
+              type: 'string',
+              description:
+                'The id inside the brackets, e.g. \"gold\" for @COUNT[gold]{10}. May not contain \".\" — a dot expands into a nested object Simple Quest never reads.',
+            },
+            value: {
+              type: 'number',
+              description:
+                'The value to store. Omit to read the current state without writing anything.',
+            },
+          },
+          required: ['journalId', 'pageId', 'counterId'],
+        },
+      },
+      {
         name: 'set-timeline-config',
         description:
           'Set the axis settings on a Simple Quest timeline journal: scale, era abbreviations and content behaviour. These are journal-level settings, not page fields. ONLY the settings you name are written; anything omitted keeps its current value, so this never resets a timeline you have already tuned. Values are validated by hand because Simple Quest flags have no data model to check them against, and a wrong type is stored silently and then used in arithmetic. Call with only a journal identifier to read the settings currently in effect without writing anything. Use get-timeline to see the result on the axis.',
@@ -265,6 +292,30 @@ export class SimpleQuestTools {
         },
       },
     ];
+  }
+
+  async handleSetQuestCounter(args: any): Promise<any> {
+    this.logger.info('Setting Simple Quest counter', {
+      pageId: args?.pageId,
+      counterId: args?.counterId,
+    });
+
+    try {
+      // Returned as-is. A refusal here names the real page ids or explains the split
+      // between the timeline and the page sheet, and that would not survive
+      // ErrorHandler.handleToolError.
+      return await this.foundryClient.query('foundry-mcp-bridge.setQuestCounter', {
+        journalId: args?.journalId,
+        pageId: args?.pageId,
+        counterId: args?.counterId,
+        value: args?.value,
+      });
+    } catch (error) {
+      this.logger.error('Failed to set counter', error);
+      throw new Error(
+        `Failed to set counter: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
   }
 
   async handleSetTimelineConfig(args: any): Promise<any> {

@@ -4726,6 +4726,248 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Set one Simple Quest counter (`@COUNT` / `@REPUTATION`) on a page.
+   *
+   * ⚠️ **The target cannot be inferred, so this tool does not try.** An `@COUNT` in an
+   * **event** body has no single storage location — the three views that render it disagree
+   * about which document holds the value:
+   *
+   * | View                    | Call site                        | `relativeTo` | reads from |
+   * | ----------------------- | -------------------------------- | ------------ | ---------- |
+   * | Timeline, era body      | `Timeline.js` L106               | `era`        | the era    |
+   * | **Timeline, event body**| **`Timeline.js` L130**           | **`era`**    | **the era**|
+   * | The event's own sheet   | `JournalPageHelpers.js` L154     | `this.page`  | the event  |
+   * | Search preview          | `Search.js` L155                 | `p`          | the event  |
+   *
+   * So the same `@COUNT[gold]{10}` in an event body shows one number on the timeline and a
+   * different one on the page's own sheet. `journalId` and `pageId` are therefore both
+   * required, and writing to an event page is **warned about, not refused** — it is the
+   * right target for two of the four views.
+   *
+   * Two more things the source dictates:
+   *
+   * - **`@COUNT` and `@REPUTATION` share one `counters` object** (`enrichers.js` L128 and
+   *   L159), so they share an id namespace. `@COUNT[gold]` and `@REPUTATION[gold]` on one
+   *   page are the same counter.
+   * - **The maximum lives in the body text, not in the flag.** `@COUNT[gold]{10}` declares
+   *   the 10. A stored value above it renders as `(15 / 10)`, and the next click wraps to 0,
+   *   because `main.js` L149 is `(value + 1) % (count + 1)`.
+   */
+  async setQuestCounter(request: {
+    journalId: string;
+    pageId: string;
+    counterId: string;
+    value?: number | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const moduleId = 'simple-quest';
+    const module = game.modules?.get(moduleId);
+    if (!module?.active) {
+      return { success: false, message: `The "${moduleId}" module is not active in this world.` };
+    }
+
+    const journal = game.journal.get(request.journalId);
+    if (!journal) {
+      return { success: false, message: `Journal not found: ${request.journalId}` };
+    }
+    const page = journal.pages.get(request.pageId);
+    if (!page) {
+      return {
+        success: false,
+        message:
+          `Page not found: ${request.pageId}. Pages in "${journal.name}": ` +
+          `${Array.from<any>(journal.pages)
+            .map((p: any) => `"${p.name}" (${p.id})`)
+            .join(', ')}.`,
+      };
+    }
+
+    const id = request.counterId;
+    if (typeof id !== 'string' || id.length === 0 || id.includes('.')) {
+      return {
+        success: false,
+        refused: true,
+        reason: 'invalid-counter-id',
+        message:
+          `Counter id ${JSON.stringify(id)} is not usable. It must be a non-empty string ` +
+          `without ".": a dot expands into a nested object, and Simple Quest reads the ` +
+          `counters flag with the literal id, so the value would be unreachable.`,
+      };
+    }
+
+    /** Every counter declared in one page body, parsed the way `enrichers.js` parses it. */
+    const declarationsIn = (
+      doc: any
+    ): Array<{ id: string; min: number; max: number; kind: string }> => {
+      const html = typeof doc?.text?.content === 'string' ? doc.text.content : '';
+      const found: Array<{ id: string; min: number; max: number; kind: string }> = [];
+
+      // L123: /@COUNT\[(.*?)\]{(.*?)\}/g — max only, min is 0.
+      for (const m of html.matchAll(/@COUNT\[(.*?)\]\{(.*?)\}/g)) {
+        found.push({ id: m[1] ?? '', min: 0, max: parseInt(m[2] ?? '', 10), kind: 'COUNT' });
+      }
+      // L142-155: the id may carry ",colour,icon" and a "$bar" marker, and the braces are
+      // either "{max}" or "{min,max}".
+      for (const m of html.matchAll(/@REPUTATION\[(.*?)\]\{(.*?)\}/g)) {
+        const repId = (m[1] ?? '').split(',')[0]!.replace('$bar', '');
+        const parts = (m[2] ?? '').split(',');
+        let min = parseInt(parts[0] ?? '', 10);
+        let max = parts[1] === undefined ? min : parseInt(parts[1], 10);
+        if (parts[1] === undefined) min = 0;
+        found.push({ id: repId, min, max, kind: 'REPUTATION' });
+      }
+      return found;
+    };
+
+    const onThisPage = declarationsIn(page).filter(d => d.id === id);
+
+    // Where else in this journal is this id written? Event bodies resolve against their era
+    // on the timeline, so an id declared in an event but stored on the era is correct there.
+    const elsewhere = Array.from<any>(journal.pages)
+      .filter((p: any) => p.id !== page.id)
+      .map((p: any) => ({ page: p, decls: declarationsIn(p).filter(d => d.id === id) }))
+      .filter(x => x.decls.length > 0)
+      .map(x => ({ pageName: x.page.name, pageId: x.page.id, pageType: x.page.type }));
+
+    const held = (page.getFlag(moduleId, 'counters') as Record<string, unknown>) ?? {};
+
+    const report = (extra: Record<string, unknown>): Record<string, unknown> => ({
+      journalId: journal.id,
+      pageId: page.id,
+      pageName: page.name,
+      pageType: page.type,
+      counterId: id,
+      declaredHere: onThisPage.map(d => ({ kind: d.kind, min: d.min, max: d.max })),
+      declaredOnOtherPages: elsewhere,
+      allCountersOnPage: held,
+      ...extra,
+    });
+
+    // No value means "tell me the state", not "write a default".
+    if (request.value === undefined) {
+      return report({
+        success: true,
+        wrote: false,
+        currentValue: (held[id] as number) ?? 0,
+        message: `No value was given, so nothing was written. ${
+          (held[id] as number) === undefined
+            ? `"${id}" has no stored value on this page, which Simple Quest renders as 0.`
+            : `"${id}" currently holds ${held[id]}.`
+        }`,
+      });
+    }
+
+    if (typeof request.value !== 'number' || !Number.isFinite(request.value)) {
+      return report({
+        success: false,
+        refused: true,
+        reason: 'invalid-value',
+        message:
+          `value must be a finite number, got ${JSON.stringify(request.value)}. Simple Quest ` +
+          `does arithmetic on it (main.js L149), so anything else renders as NaN.`,
+      });
+    }
+
+    const warnings: string[] = [];
+
+    // The split brain. Warned, never refused — an event page is the right target for the
+    // event's own sheet and for search, and the wrong one for the timeline.
+    if (page.type === `${moduleId}.event`) {
+      const t = this.analyseTimeline(journal, moduleId);
+      const hit = t.gm.placed.find((x: any) => x.ev.id === page.id);
+      warnings.push(
+        `This is an event page, and the timeline does NOT read counters from event pages. ` +
+          `Timeline.js L130 enriches an event body with relativeTo set to its ERA, so on the ` +
+          `timeline "${id}" is read from ${
+            hit ? `the era "${hit.era.name}" (pageId ${hit.era.id})` : 'its containing era'
+          }, while this write lands on the event. The event's own sheet and the search ` +
+          `preview read the event, so this value will show there. Write to the era as well ` +
+          `if the number should match on the timeline.`
+      );
+      if (hit) {
+        warnings.push(
+          `Note that every event inside "${hit.era.name}" shares that era's single counters ` +
+            `object on the timeline, so two events both using "${id}" are one counter there ` +
+            `and two counters on their own sheets.`
+        );
+      }
+    }
+
+    if (onThisPage.length === 0) {
+      warnings.push(
+        `"${id}" is not declared in this page's body, so nothing on this page will display ` +
+          `it. The value is stored and readable, but a counter only renders where the text ` +
+          `contains @COUNT[${id}]{max} or @REPUTATION[${id}]{...}.` +
+          (elsewhere.length > 0
+            ? ` It IS declared on: ${elsewhere.map(e => `"${e.pageName}"`).join(', ')}.`
+            : '')
+      );
+    }
+
+    for (const d of onThisPage) {
+      if (Number.isFinite(d.max) && request.value > d.max) {
+        warnings.push(
+          `${request.value} is above the maximum ${d.max} declared by @${d.kind}[${id}] in ` +
+            `this page's body; it renders as "(${request.value} / ${d.max})" and the next ` +
+            `click wraps to 0, because main.js L149 is (value + 1) % (count + 1).`
+        );
+      }
+      if (Number.isFinite(d.min) && request.value < d.min) {
+        warnings.push(
+          `${request.value} is below the minimum ${d.min} declared by @${d.kind}[${id}] in ` +
+            `this page's body.`
+        );
+      }
+    }
+
+    try {
+      const flagResult = await this.applySimpleQuestFlags(page, {
+        counters: { [id]: request.value },
+      });
+
+      if (!flagResult.ok) {
+        this.auditLog('setQuestCounter', request, 'failure', 'flag-write-not-verified');
+        return report({
+          success: false,
+          reason: 'flag-write-not-verified',
+          unverifiedFlags: flagResult.unverified,
+          message:
+            `The counter did not read back as written: ` +
+            `${flagResult.unverified.map(u => `${u.path} expected ${JSON.stringify(u.expected)}, got ${JSON.stringify(u.actual)}`).join('; ')}.`,
+        });
+      }
+
+      this.auditLog('setQuestCounter', request, 'success');
+
+      const after = (page.getFlag(moduleId, 'counters') as Record<string, unknown>) ?? {};
+      return {
+        ...report({
+          success: true,
+          wrote: true,
+          changedFlags: flagResult.changed,
+          flagsVerified: true,
+          allCountersOnPage: after,
+        }),
+        ...(warnings.length > 0 ? { warnings } : {}),
+      };
+    } catch (error) {
+      this.auditLog(
+        'setQuestCounter',
+        request,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      return {
+        success: false,
+        message: `Failed to set counter: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  /**
    * Write the six timeline axis settings on a **JournalEntry**.
    *
    * ⚠️ **This is the first caller to write a Simple Quest flag to a journal rather than a

@@ -66,6 +66,7 @@ export class QueryHandlers {
       this.handleGetSimpleQuestContext.bind(this);
     CONFIG.queries[`${modulePrefix}.getTimeline`] = this.handleGetTimeline.bind(this);
     CONFIG.queries[`${modulePrefix}.setTimelineConfig`] = this.handleSetTimelineConfig.bind(this);
+    CONFIG.queries[`${modulePrefix}.setQuestCounter`] = this.handleSetQuestCounter.bind(this);
     CONFIG.queries[`${modulePrefix}.createSimpleQuestPage`] =
       this.handleCreateSimpleQuestPage.bind(this);
     CONFIG.queries[`${modulePrefix}.updateSimpleQuestPage`] =
@@ -723,6 +724,29 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to read timeline: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle a Simple Quest counter write
+   */
+  async handleSetQuestCounter(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      return await this.dataAccess.setQuestCounter({
+        journalId: data?.journalId,
+        pageId: data?.pageId,
+        counterId: data?.counterId,
+        value: data?.value,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to set counter: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

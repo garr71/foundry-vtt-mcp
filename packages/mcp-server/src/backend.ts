@@ -1819,6 +1819,10 @@ async function startBackend(): Promise<void> {
                   break;
 
                 // Simple Quest tools
+                case 'set-quest-counter':
+                  result = await simpleQuestTools.handleSetQuestCounter(args);
+                  break;
+
                 case 'set-timeline-config':
                   result = await simpleQuestTools.handleSetTimelineConfig(args);
                   break;
