@@ -3061,6 +3061,26 @@ Two further facts read from source this cycle:
   `(15 / 3)` and the _next click wraps to 0_. The tool parses the body with Simple Quest's own two
   regexes, reports what each id declares, and warns when a value falls outside it.
 
+###### UI confirmation 2026-08-22 — the split brain observed, and two corrections
+
+**Observed.** With the era holding `gold: 9` and the event holding `gold: 2`, the timeline card for
+"Gate4 Event" rendered **(9 / 10)** — the ERA's value — from text that lives in the EVENT body. The
+split is no longer a source-reading claim.
+
+**Correction 1, from Franklin.** In timeline mode, clicking a page in the SQ browser sidebar only
+**scrolls**: `Timeline.js` L174-181 binds `goTo(uuid)`, and clicking an era card calls
+`openToPage`, with `goTo` commented out. There is no page view to reach that way, so with both cards
+already on screen the click appears to do nothing. It is not broken. The event page sheet renders
+through `JournalPageGenericSheet.enrichText` (`relativeTo: this.page`), which is the **core Foundry
+journal sheet** — reached from Foundry's own Journal directory, not the Simple Quest browser. The
+page config form shows raw enricher text by design and is not a third view.
+
+**Correction 2, a consequence not previously noted.** `Search.js` L155 builds its index from
+`enrichHTML(p.text.content, { relativeTo: p })` and stores `el.textContent`. So an event page is
+**indexed with its own counter value**, not the era's: searching this fixture matches on "2 / 10",
+a number the timeline never displays. A third place the two values diverge, and one for 7z to
+mention.
+
 ###### Gate 12/12, live, 2026-08-22
 
 Its fixture declares the counter in the **event** body, which is the only arrangement that can
