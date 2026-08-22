@@ -55,6 +55,54 @@ export class SimpleQuestTools {
         },
       },
       {
+        name: 'set-timeline-config',
+        description:
+          'Set the axis settings on a Simple Quest timeline journal: scale, era abbreviations and content behaviour. These are journal-level settings, not page fields. ONLY the settings you name are written; anything omitted keeps its current value, so this never resets a timeline you have already tuned. Values are validated by hand because Simple Quest flags have no data model to check them against, and a wrong type is stored silently and then used in arithmetic. Call with only a journal identifier to read the settings currently in effect without writing anything. Use get-timeline to see the result on the axis.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            journalId: {
+              type: 'string',
+              description: 'The timeline journal. Use this or \"journalName\".',
+            },
+            journalName: {
+              type: 'string',
+              description:
+                'EXACT journal name, never a substring. If neither identifier is given and exactly one timeline journal exists, that one is used; if several exist the call is refused and they are listed.',
+            },
+            timeScale: {
+              type: 'number',
+              description:
+                'Pixels per year. Default 10. Must be at least 0.1 — Simple Quest floors it at 0.1 when rendering, so anything smaller would be stored but never used.',
+            },
+            dynamicTimeScale: {
+              type: 'boolean',
+              description:
+                'Default false. When true, eras are sized by how many events they contain rather than by how many years they span.',
+            },
+            negativeAbb: {
+              type: 'string',
+              description:
+                'Suffix for negative years. Default \"BC\". Empty is allowed and meaningful: Simple Quest falls back to a minus sign when it is blank.',
+            },
+            positiveAbb: {
+              type: 'string',
+              description: 'Suffix for positive years. Default \"AC\".',
+            },
+            showMinus: {
+              type: 'boolean',
+              description:
+                'Default false. Print a minus sign on negative years in addition to the abbreviation.',
+            },
+            content: {
+              type: 'string',
+              description:
+                'How era and event bodies show: \"always\" (default), \"toggleOff\" (collapsed, expandable) or \"toggleOn\" (expanded, collapsible).',
+            },
+          },
+        },
+      },
+      {
         name: 'create-simple-quest-page',
         description:
           'Create one Simple Quest page (quest, lore, character, creature, faction, location, event, era, achievement). Call get-simple-quest-context first for the exact system field names. IMPORTANT — defaults are for PREP and deliberately differ from the Simple Quest module\'s own: the page is created hidden from players (ownership none on both journal and page), a quest page gets status -1 (Undiscovered) rather than the module default 0 (In Progress), and every objective in the body is marked secret. Pass visibleToPlayers: true to create it already visible, or reveal later with the visibility tool. Body prose goes in "text" as HTML; quest objectives are <li> items in that HTML. One page per call. For "event" and "era" pages the response carries a "timeline" block saying whether the page will actually render: an event whose year falls in no era is written successfully and NEVER drawn, so the write is not refused but the warning must be read.',
@@ -217,6 +265,35 @@ export class SimpleQuestTools {
         },
       },
     ];
+  }
+
+  async handleSetTimelineConfig(args: any): Promise<any> {
+    this.logger.info('Writing Simple Quest timeline config', {
+      journalId: args?.journalId,
+      journalName: args?.journalName,
+    });
+
+    try {
+      // Returned as-is, refusals included: a rejected value names the setting and says what
+      // is allowed, and that message would not survive ErrorHandler.handleToolError.
+      return await this.foundryClient.query('foundry-mcp-bridge.setTimelineConfig', {
+        journalId: args?.journalId,
+        journalName: args?.journalName,
+        timeScale: args?.timeScale,
+        dynamicTimeScale: args?.dynamicTimeScale,
+        negativeAbb: args?.negativeAbb,
+        positiveAbb: args?.positiveAbb,
+        showMinus: args?.showMinus,
+        content: args?.content,
+      });
+    } catch (error) {
+      this.logger.error('Failed to write timeline config', error);
+      throw new Error(
+        `Failed to write timeline config: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
+      );
+    }
   }
 
   async handleGetTimeline(args: any): Promise<any> {

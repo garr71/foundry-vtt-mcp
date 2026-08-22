@@ -65,6 +65,7 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.getSimpleQuestContext`] =
       this.handleGetSimpleQuestContext.bind(this);
     CONFIG.queries[`${modulePrefix}.getTimeline`] = this.handleGetTimeline.bind(this);
+    CONFIG.queries[`${modulePrefix}.setTimelineConfig`] = this.handleSetTimelineConfig.bind(this);
     CONFIG.queries[`${modulePrefix}.createSimpleQuestPage`] =
       this.handleCreateSimpleQuestPage.bind(this);
     CONFIG.queries[`${modulePrefix}.updateSimpleQuestPage`] =
@@ -722,6 +723,33 @@ export class QueryHandlers {
     } catch (error) {
       throw new Error(
         `Failed to read timeline: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Handle a Simple Quest timeline config write
+   */
+  async handleSetTimelineConfig(data: any): Promise<any> {
+    try {
+      const gmCheck = this.validateGMAccess();
+      if (!gmCheck.allowed) {
+        return { error: 'Access denied', success: false };
+      }
+
+      return await this.dataAccess.setTimelineConfig({
+        journalId: data?.journalId,
+        journalName: data?.journalName,
+        timeScale: data?.timeScale,
+        dynamicTimeScale: data?.dynamicTimeScale,
+        negativeAbb: data?.negativeAbb,
+        positiveAbb: data?.positiveAbb,
+        showMinus: data?.showMinus,
+        content: data?.content,
+      });
+    } catch (error) {
+      throw new Error(
+        `Failed to write timeline config: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

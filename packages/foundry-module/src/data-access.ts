@@ -1677,6 +1677,63 @@ const SIMPLE_QUEST_FLAG_SCOPE = 'simple-quest';
 const SIMPLE_QUEST_PAGE_FLAG_KEYS = ['counters'] as const;
 
 /**
+ * Timeline axis settings, stored on the **JournalEntry** (not the page).
+ * Read by `Timeline._prepareContext` L42-51 and written by `TimelineJournalConfig._onSubmit`.
+ * Every one is a scalar, which is why 7b.3 is the first caller to exercise the writer's
+ * scalar branch at all — `counters` is the only key that existed before it, and that one is
+ * an object map.
+ */
+const SIMPLE_QUEST_JOURNAL_FLAG_KEYS = [
+  'timeScale',
+  'dynamicTimeScale',
+  'negativeAbb',
+  'positiveAbb',
+  'showMinus',
+  'content',
+] as const;
+
+/** What a scalar Simple Quest flag is allowed to hold. */
+interface FlagValueSpec {
+  type: 'number' | 'boolean' | 'string';
+  choices?: readonly string[];
+  /** Smallest value that is stored AND used as given. */
+  min?: number;
+  /** Appended to a refusal so it teaches on contact. */
+  note?: string;
+}
+
+/**
+ * Per-key value rules for the journal flags.
+ *
+ * Flags are **schema-less**, so `validateSystemData`'s trick of asking the data model what it
+ * would store does not apply here — there is no model to ask. Every rule below is therefore
+ * declared by hand from the installed source, and each one is a value Simple Quest would
+ * otherwise accept and then misuse.
+ */
+const SIMPLE_QUEST_JOURNAL_FLAG_SPECS: Readonly<Record<string, FlagValueSpec>> = {
+  // `Timeline.js` L42 is `Math.max(flag ?? 10, 0.1)`. Anything below 0.1 is stored as sent
+  // and rendered as 0.1, so the stored value would not be the value used — the same
+  // divergence the system-field guard refuses.
+  timeScale: {
+    type: 'number',
+    min: 0.1,
+    note: 'Timeline.js L42 floors it at 0.1 when rendering, so a smaller value would be stored but never used.',
+  },
+  dynamicTimeScale: { type: 'boolean' },
+  negativeAbb: {
+    type: 'string',
+    note: 'Empty is allowed and meaningful: L96 falls back to a minus sign when it is blank.',
+  },
+  positiveAbb: { type: 'string' },
+  showMinus: { type: 'boolean' },
+  content: {
+    type: 'string',
+    choices: ['always', 'toggleOff', 'toggleOn'],
+    note: 'TimelineJournalConfig.js L45-49 offers exactly these three.',
+  },
+};
+
+/**
  * Flag keys whose value is a free-form id → value map rather than a scalar. Their **keys**
  * cannot be validated against a list because counter ids are arbitrary by design (whatever
  * the GM typed inside `@COUNT[...]`), so the shape is validated instead.
@@ -4204,6 +4261,96 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Pick the timeline journal a request refers to, or refuse and say why.
+   *
+   * Shared by the read tool and the config writer so both refuse in the same places. The
+   * important one is the last branch: with more than one timeline journal and no identifier,
+   * this **refuses and lists them** rather than quietly taking the first, which is what
+   * Simple Quest's own UI does (`SimpleQuest.js` L248-249). Defaulting to the only candidate
+   * when there is exactly one is a lookup that succeeded, not a silent fallback, and
+   * `resolvedBy` says which happened.
+   */
+  private resolveTimelineJournal(
+    request: { journalId?: string | undefined; journalName?: string | undefined },
+    moduleId: string
+  ):
+    | {
+        journal: any;
+        resolvedBy: string;
+        inTimelineFolder: boolean;
+        timelineFolder: any;
+      }
+    | { refusal: Record<string, unknown> } {
+    const { folder: timelineFolder, journalIds } = this.timelineFolderInfo(moduleId);
+    const timelineJournals = Array.from(journalIds)
+      .map((id: string) => game.journal.get(id))
+      .filter(Boolean)
+      .map((j: any) => ({ id: j.id, name: j.name }));
+
+    const done = (journal: any, resolvedBy: string) => ({
+      journal,
+      resolvedBy,
+      inTimelineFolder: journalIds.has(journal.id),
+      timelineFolder,
+    });
+
+    if (request.journalId) {
+      const journal = game.journal.get(request.journalId);
+      if (!journal) {
+        return { refusal: { success: false, message: `Journal not found: ${request.journalId}` } };
+      }
+      return done(journal, 'journalId');
+    }
+
+    if (request.journalName) {
+      // Exact match only. Resolving a document by "contains" is the defect this project has
+      // now shipped five times.
+      const matches = Array.from<any>(game.journal ?? []).filter(
+        (j: any) => j.name === request.journalName
+      );
+      if (matches.length === 0) {
+        return {
+          refusal: {
+            success: false,
+            message:
+              `No journal is named exactly "${request.journalName}". Timeline journals: ` +
+              `${timelineJournals.map(j => `"${j.name}"`).join(', ') || 'none'}.`,
+          },
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          refusal: {
+            success: false,
+            message:
+              `${matches.length} journals are named "${request.journalName}"; pass journalId ` +
+              `instead: ${matches.map((j: any) => j.id).join(', ')}.`,
+          },
+        };
+      }
+      return done(matches[0], 'journalName');
+    }
+
+    if (timelineJournals.length === 1) {
+      return done(game.journal.get(timelineJournals[0]!.id), 'only-timeline-journal');
+    }
+
+    return {
+      refusal: {
+        success: false,
+        timelineJournals,
+        message:
+          timelineJournals.length === 0
+            ? `No journals are in the Simple Quest timeline folder${
+                timelineFolder ? ` ("${timelineFolder.name}")` : ', which does not exist'
+              }.`
+            : `${timelineJournals.length} timeline journals exist; name one with journalId ` +
+              `or journalName: ${timelineJournals.map(j => `"${j.name}" (${j.id})`).join(', ')}.`,
+      },
+    };
+  }
+
+  /**
    * The Simple Quest timeline directory and every journal inside it.
    *
    * The directory is identified by its `simpleQuestDir` flag, never by name, and the walk is
@@ -4579,6 +4726,175 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Write the six timeline axis settings on a **JournalEntry**.
+   *
+   * ⚠️ **This is the first caller to write a Simple Quest flag to a journal rather than a
+   * page, and the first to write a scalar flag at all.** `counters` was the only key that
+   * existed before it, and that one is an object map, so both `applySimpleQuestFlags`'s
+   * scalar branch and its `JournalEntry` path were unexercised code until this cycle. That
+   * was recorded as debt in 7b.0 and is discharged by this tool's gate, not by inspection.
+   *
+   * Flags are **schema-less**, so `validateSystemData`'s approach — ask the data model what
+   * it would store — has nothing to ask here. Every value rule is declared by hand in
+   * {@link SIMPLE_QUEST_JOURNAL_FLAG_SPECS} from the installed source. Without them Simple
+   * Quest would store the string `"ten"` for `timeScale` and then do arithmetic on it.
+   *
+   * **Omitted settings are left alone.** A config writer that filled in its own defaults
+   * would silently retune a timeline the GM had already tuned, and the caller would have no
+   * way to tell that from a no-op.
+   */
+  async setTimelineConfig(request: {
+    journalId?: string | undefined;
+    journalName?: string | undefined;
+    timeScale?: number | undefined;
+    dynamicTimeScale?: boolean | undefined;
+    negativeAbb?: string | undefined;
+    positiveAbb?: string | undefined;
+    showMinus?: boolean | undefined;
+    content?: string | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('createActor', { quantity: 1 });
+    if (!permissionCheck.allowed) {
+      return { success: false, message: `Timeline config denied: ${permissionCheck.reason}` };
+    }
+
+    const moduleId = 'simple-quest';
+    const module = game.modules?.get(moduleId);
+    if (!module?.active) {
+      return {
+        success: false,
+        message: `The "${moduleId}" module is not active in this world; it has no timelines.`,
+      };
+    }
+
+    const resolved = this.resolveTimelineJournal(request, moduleId);
+    if ('refusal' in resolved) return resolved.refusal;
+    const { journal, resolvedBy, inTimelineFolder, timelineFolder } = resolved;
+
+    // Only the settings the caller actually named.
+    const flags: Record<string, unknown> = {};
+    for (const key of SIMPLE_QUEST_JOURNAL_FLAG_KEYS) {
+      const value = (request as Record<string, unknown>)[key];
+      if (value !== undefined) flags[key] = value;
+    }
+
+    const currentConfig = (): Record<string, unknown> => ({
+      timeScale: journal.getFlag(moduleId, 'timeScale') ?? 10,
+      dynamicTimeScale: journal.getFlag(moduleId, 'dynamicTimeScale') ?? false,
+      negativeAbb: journal.getFlag(moduleId, 'negativeAbb') ?? 'BC',
+      positiveAbb: journal.getFlag(moduleId, 'positiveAbb') ?? 'AC',
+      showMinus: journal.getFlag(moduleId, 'showMinus') ?? false,
+      content: journal.getFlag(moduleId, 'content') ?? 'always',
+    });
+
+    // Nothing named is not an error, and it must not become a reset.
+    if (Object.keys(flags).length === 0) {
+      return {
+        success: true,
+        journalId: journal.id,
+        journalName: journal.name,
+        resolvedBy,
+        changedFlags: {},
+        config: currentConfig(),
+        message:
+          `No settings were named, so nothing was written. The values below are the ones ` +
+          `currently in effect; any shown as a default are unset flags rather than stored ` +
+          `values. Name a setting to change it.`,
+      };
+    }
+
+    const check = this.validateSimpleQuestFlags(
+      flags,
+      SIMPLE_QUEST_JOURNAL_FLAG_KEYS,
+      'timeline journal',
+      SIMPLE_QUEST_JOURNAL_FLAG_SPECS
+    );
+    if (!check.valid) {
+      return {
+        success: false,
+        refused: true,
+        reason: 'invalid-flag-value',
+        rejected: check.rejected,
+        accepted: check.accepted,
+        message: check.message,
+      };
+    }
+
+    try {
+      const before = currentConfig();
+      const flagResult = await this.applySimpleQuestFlags(journal, flags);
+
+      // Read back, and refuse the success claim if it did not take. 7a.5 shipped a tool that
+      // reported success for a write Foundry had discarded.
+      if (!flagResult.ok) {
+        this.auditLog('setTimelineConfig', request, 'failure', 'flag-write-not-verified');
+        return {
+          success: false,
+          reason: 'flag-write-not-verified',
+          journalId: journal.id,
+          unverifiedFlags: flagResult.unverified,
+          changedFlags: flagResult.changed,
+          message:
+            `${flagResult.unverified.length} setting(s) did not read back as written: ` +
+            `${flagResult.unverified.map(u => u.path).join(', ')}.`,
+        };
+      }
+
+      const after = currentConfig();
+      // Changing timeScale changes the axis, so say what it became. Reading the flag back
+      // proves storage; this is the closest the response can get to proving effect.
+      const analysis = this.analyseTimeline(journal, moduleId);
+
+      this.auditLog('setTimelineConfig', request, 'success');
+
+      return {
+        success: true,
+        journalId: journal.id,
+        journalName: journal.name,
+        resolvedBy,
+        inTimelineFolder,
+        ...(inTimelineFolder
+          ? {}
+          : {
+              renderWarning:
+                `This journal is not in the Simple Quest timeline folder` +
+                `${timelineFolder ? ` ("${timelineFolder.name}")` : ''}, so these settings are ` +
+                `stored but nothing here renders as a timeline.`,
+            }),
+        changedFlags: flagResult.changed,
+        flagsVerified: true,
+        unchangedSettings: SIMPLE_QUEST_JOURNAL_FLAG_KEYS.filter(k => !(k in flagResult.changed)),
+        configBefore: before,
+        config: after,
+        axis: {
+          totalHeight: analysis.totalHeight,
+          effectiveTimeScale: analysis.config.effectiveTimeScale,
+          eras: analysis.eras.map((e: any) => ({
+            name: e.name,
+            heightPx: analysis.eraHeights.get(e) ?? null,
+          })),
+        },
+        ...(analysis.layoutWarnings.length > 0 ? { layoutWarnings: analysis.layoutWarnings } : {}),
+      };
+    } catch (error) {
+      this.auditLog(
+        'setTimelineConfig',
+        request,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      return {
+        success: false,
+        message: `Failed to write timeline config: ${
+          error instanceof Error ? error.message : 'Unknown error'
+        }`,
+      };
+    }
+  }
+
+  /**
    * Read a Simple Quest timeline the way the module renders it, and say what is invisible.
    *
    * `Timeline._prepareContext` (Timeline.js L41-165) is **reproduced, not approximated** —
@@ -4615,67 +4931,9 @@ export class FoundryDataAccess {
       };
     }
 
-    const { folder: timelineFolder, journalIds: timelineJournalIds } =
-      this.timelineFolderInfo(moduleId);
-    const timelineJournals = Array.from(timelineJournalIds)
-      .map((id: string) => game.journal.get(id))
-      .filter(Boolean)
-      .map((j: any) => ({ id: j.id, name: j.name }));
-
-    // ---- resolve the journal ---------------------------------------------------------
-    let journal: any = null;
-    let resolvedBy: string;
-
-    if (request.journalId) {
-      journal = game.journal.get(request.journalId);
-      if (!journal) {
-        return { success: false, message: `Journal not found: ${request.journalId}` };
-      }
-      resolvedBy = 'journalId';
-    } else if (request.journalName) {
-      // Exact match only. Resolving a document by "contains" is the defect this project has
-      // now shipped five times.
-      const matches = Array.from<any>(game.journal ?? []).filter(
-        (j: any) => j.name === request.journalName
-      );
-      if (matches.length === 0) {
-        return {
-          success: false,
-          message:
-            `No journal is named exactly "${request.journalName}". Timeline journals: ` +
-            `${timelineJournals.map(j => `"${j.name}"`).join(', ') || 'none'}.`,
-        };
-      }
-      if (matches.length > 1) {
-        return {
-          success: false,
-          message:
-            `${matches.length} journals are named "${request.journalName}"; pass journalId ` +
-            `instead: ${matches.map((j: any) => j.id).join(', ')}.`,
-        };
-      }
-      journal = matches[0];
-      resolvedBy = 'journalName';
-    } else if (timelineJournals.length === 1) {
-      // Defaulting to the only candidate is a lookup that succeeded, not a silent fallback,
-      // and the response says which it was.
-      journal = game.journal.get(timelineJournals[0]!.id);
-      resolvedBy = 'only-timeline-journal';
-    } else {
-      return {
-        success: false,
-        timelineJournals,
-        message:
-          timelineJournals.length === 0
-            ? `No journals are in the Simple Quest timeline folder${
-                timelineFolder ? ` ("${timelineFolder.name}")` : ', which does not exist'
-              }.`
-            : `${timelineJournals.length} timeline journals exist; name one with journalId ` +
-              `or journalName: ${timelineJournals.map(j => `"${j.name}" (${j.id})`).join(', ')}.`,
-      };
-    }
-
-    const inTimelineFolder = timelineJournalIds.has(journal.id);
+    const resolved = this.resolveTimelineJournal(request, moduleId);
+    if ('refusal' in resolved) return resolved.refusal;
+    const { journal, resolvedBy, inTimelineFolder, timelineFolder } = resolved;
 
     const {
       config,
@@ -5921,7 +6179,8 @@ export class FoundryDataAccess {
   private validateSimpleQuestFlags(
     flags: Record<string, unknown> | undefined,
     allowedKeys: readonly string[],
-    documentLabel: string
+    documentLabel: string,
+    valueSpecs?: Readonly<Record<string, FlagValueSpec>>
   ): { valid: boolean; accepted: string[]; rejected: string[]; message?: string } {
     if (!flags || Object.keys(flags).length === 0) {
       return { valid: true, accepted: [], rejected: [] };
@@ -6007,6 +6266,52 @@ export class FoundryDataAccess {
         rejected.push(key);
         reasons.push(`${key}: expected a scalar (string, number or boolean), got an object.`);
         continue;
+      }
+
+      // Per-key value rules. Flags have no data model, so nothing downstream will catch a
+      // wrong type: Simple Quest would store the string "ten" for timeScale quite happily
+      // and then do arithmetic on it.
+      const spec = valueSpecs?.[key];
+      if (spec) {
+        if (spec.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) {
+          rejected.push(key);
+          reasons.push(
+            `${key}: must be a finite number, got ${
+              typeof value === 'string' ? `the string ${JSON.stringify(value)}` : typeof value
+            }.${spec.note ? ` ${spec.note}` : ''}`
+          );
+          continue;
+        }
+        if (spec.type === 'boolean' && typeof value !== 'boolean') {
+          rejected.push(key);
+          reasons.push(
+            `${key}: must be true or false, got ${
+              typeof value === 'string' ? `the string ${JSON.stringify(value)}` : typeof value
+            }. Simple Quest reads it with "??", so a truthy string would read as set.`
+          );
+          continue;
+        }
+        if (spec.type === 'string' && typeof value !== 'string') {
+          rejected.push(key);
+          reasons.push(`${key}: must be a string, got ${typeof value}.`);
+          continue;
+        }
+        if (spec.choices && !spec.choices.includes(value as string)) {
+          rejected.push(key);
+          reasons.push(
+            `${key}: ${JSON.stringify(value)} is not one of ${spec.choices.join(', ')}.${
+              spec.note ? ` ${spec.note}` : ''
+            }`
+          );
+          continue;
+        }
+        if (spec.min !== undefined && (value as number) < spec.min) {
+          rejected.push(key);
+          reasons.push(
+            `${key}: must be at least ${spec.min}, got ${value}.${spec.note ? ` ${spec.note}` : ''}`
+          );
+          continue;
+        }
       }
 
       accepted.push(key);

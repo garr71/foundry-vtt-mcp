@@ -2582,7 +2582,7 @@ fixtures and there is deliberately **no journal-delete tool**:
 
 ---
 
-#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 + 7b.2 done 2026-08-21, 7b.3 next**
+#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 + 7b.2 done 2026-08-21, 7b.3 done 2026-08-22, 7b.4 next**
 
 > **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
 > surface listed further down: **`event`/`era` timeline** (the campaign involves history and dated
@@ -2969,6 +2969,69 @@ so the boundary check can fail.
 Check 8 creates its own throwaway journal in `Quests` rather than writing into a real Simple Quest
 content journal.
 
+##### ✅ 7b.3 — `set-timeline-config` **DONE 2026-08-22, gate 12/12 (57 → 58)**, and the 7b.0 debt is discharged
+
+Writes the six axis settings on the **JournalEntry**: `timeScale`, `dynamicTimeScale`,
+`negativeAbb`, `positiveAbb`, `showMinus`, `content`. Only the settings named are written; anything
+omitted keeps its stored value, so the tool can never silently retune a timeline the GM had already
+tuned.
+
+###### The debt, and what it actually was
+
+7b.0 recorded that the flags writer "is document-agnostic and handles a `JournalEntry` unchanged, but
+nothing exercises that branch yet." **Re-reading the code before starting this cycle showed the debt
+was one item larger than that.** The only flag key any caller had ever been allowed to write is
+`counters`, and `counters` is in `SIMPLE_QUEST_OBJECT_FLAG_KEYS` — so every flag write in the
+project's history took the _object_ branch, which descends per sub-key. Two things had therefore
+never run, not one:
+
+1. `applySimpleQuestFlags` with a **`JournalEntry`** as `doc`.
+2. Its **scalar branch** — the `else` that writes `flags.simple-quest.<key>` as a single flat path.
+   The validator's scalar path was equally cold.
+
+All six timeline settings are scalars on a journal, so 7b.3 lights up both at once. Checks 1-3 of the
+gate exist for exactly that and nothing else. **Both branches worked unmodified** — but that is a
+result, not something that could have been asserted from reading.
+
+###### A third gap the debt note had not mentioned
+
+There was **no per-key value validation for scalar flags at all** — the validator only checked "not
+an object". And the coercion guard shipped earlier this week does not help here: it works by asking
+Foundry's data model what it would store, and **flags have no data model**. `timeScale: "ten"` would
+have been stored as the string `"ten"`, which Simple Quest then does arithmetic on.
+
+So 7b.3 adds `SIMPLE_QUEST_JOURNAL_FLAG_SPECS`, declared by hand from the installed source, and an
+optional `valueSpecs` parameter on `validateSimpleQuestFlags`. The page caller is unchanged.
+
+The `timeScale` rule is the interesting one: the minimum is **0.1, not 0**. `Timeline.js` L42 is
+`Math.max(flag ?? 10, 0.1)`, so `0.05` is stored as sent and rendered as `0.1`. That is the same
+stored-value-is-not-the-used-value divergence the system-field guard refuses, so this refuses it too.
+
+###### Reuse rather than restatement, again
+
+`resolveTimelineJournal` was extracted from `getTimeline` so the writer refuses in exactly the same
+places the reader does — most importantly, **refusing to guess between several timeline journals**
+rather than taking the first, which is what Simple Quest's own UI does (`SimpleQuest.js` L248-249).
+The response also runs `analyseTimeline` and reports the resulting `axis.totalHeight`, so a
+`timeScale` change shows its effect rather than only its storage.
+
+##### Gate 12/12, live, 2026-08-22
+
+| #   | Check that can actually fail                                                                                                                                                       |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | **the debt:** a scalar flag written to a **JournalEntry**, away (25) and back (10), confirmed through `get-timeline` rather than the writer's own echo                             |
+| 2   | **the debt:** a string and a boolean land as a string and a boolean, not as nested objects — proof the scalar branch took the right fork                                           |
+| 3   | **the debt:** three scalar flags in one call all land and the untouched three survive                                                                                              |
+| 4   | **anti-silent-default:** called with no settings, writes nothing and leaves tuned values alone. A writer that helpfully filled in `timeScale: 10` would fail here and nowhere else |
+| 5-8 | `timeScale: "ten"`, `timeScale: 0.05`, `content: "sometimes"`, `showMinus: "yes"` each refused by name, with nothing written                                                       |
+| 9   | **branch not otherwise taken:** `timeScale: 0.1` exactly, and an empty `negativeAbb`, are **accepted**. A validator that refused everything would pass 5-8 and fail only here      |
+| 10  | the reported `axis.totalHeight` matches `get-timeline` (6000 → 12000 at scale 20) — effect, not just storage                                                                       |
+| 11  | no identifier with several timeline journals refuses and lists them                                                                                                                |
+| 12  | the fixture is restored to its documented state, so the 7b.1 gate still holds                                                                                                      |
+
+7b.1 (20/20) and 7b.2 (9/9) were re-run afterwards as the regression check on extracting
+`resolveTimelineJournal`.
+
 ##### Cycles
 
 **7b.0 — Flags foundation (no new tools). ✅ DONE, gate passed 10/10 + UI confirmed 2026-08-18.** A write path for `flags['simple-quest']` on both
@@ -2995,7 +3058,7 @@ pre-flight 3 showed is not orphaned at all but silently lands in whatever era sp
 > live defect in four already-deployed tools, so it did not wait for a timeline cycle. See
 > **The one failure** above. 7b.2 keeps only the containment half.
 
-**7b.3 — `set-timeline-config`.** The six journal flags. Numbers validated (`timeScale > 0`),
+**7b.3 — `set-timeline-config`. DONE 2026-08-22, gate 12/12 (57 -> 58); the 7b.0 debt is discharged.** The six journal flags. Numbers validated (`timeScale > 0`),
 `content` constrained to its three choices.
 
 **7b.4 — `set-quest-counter`.** `@COUNT` / `@REPUTATION` state in page flags
@@ -3008,7 +3071,7 @@ resolves against, not the page the text lives on, and say which.
 renders the literal text "Simple Timekeeping & Calendar Not Installed" into the page — not a broken
 link, a visible embarrassment — so until then the tools should treat `@time` as forbidden output.
 
-**Tool count: 56 → 59** (`get-timeline`, `set-timeline-config`, `set-quest-counter`).
+**Tool count: 56 → 59** (7b.1 and 7b.3 shipped; 58 as of 2026-08-22) (`get-timeline`, `set-timeline-config`, `set-quest-counter`).
 
 ##### Gate design
 
