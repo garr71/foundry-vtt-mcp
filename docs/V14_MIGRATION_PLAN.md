@@ -2530,53 +2530,59 @@ name, before trusting a result.
 
 #### ▶️ START HERE NEXT SESSION (updated 2026-08-21, end of Session 14)
 
-**State:** Phase 7a complete; **7b.0** done (10/10), the **silent-coercion defect** found in
-pre-flight 3 fixed (11/11), and **7b.1 `get-timeline` done** (20/20). **57 tools.** All three 7b.1
-pre-flights are closed. Nothing is half-built, and `master` is level with `origin/master` through
-`c114d43` (the 7b.1 commit follows it).
+**State:** Phase 7a complete. **7b.0** (10/10), the **silent-coercion fix** (11/11), **7b.1
+`get-timeline`** (20/20) and **7b.2 the containment guard** (9/9) are all done. **57 tools** — 7b.1
+added the only one. Nothing is half-built.
 
-**Next cycle: 7b.2 — the containment guard on create/update.** Its second half (requested-vs-stored
-value verification) already shipped on 2026-08-21, so what remains is the warning half: when an
-`event` is written, say whether it lands in an era. **Warn, do not refuse** — writing events before
-their eras exist is a legitimate prep order, so a refusal would fight the workflow. Same for an `era`
-written with a null `eraEnd`, and for a **yearless** event, which 7b.1 proved is not orphaned at all
-but silently dated to year 0 and placed in whatever era spans it.
+**Next cycle: 7b.3 — `set-timeline-config`** (57 → 58). The six journal-level flags, read from
+`TimelineJournalConfig.js` and already surfaced by `get-timeline`: `timeScale` (default 10),
+`dynamicTimeScale` (false), `negativeAbb` ("BC"), `positiveAbb` ("AC"), `showMinus` (false), and
+`content` ("always", constrained to `always` / `toggleOff` / `toggleOn`). Validate `timeScale > 0` —
+note `Timeline.js` L42 floors it at `0.1`, so a stored 0 silently renders as 0.1 and `get-timeline`
+already reports `effectiveTimeScale` separately for exactly that reason.
 
-`get-timeline` already computes every judgement 7b.2 needs to emit — containment, the orphan reason,
-and the layout warnings. **7b.2 should call into that logic, not restate it**, or the write path and
-the read path will drift on the next Simple Quest release.
+⚠️ **Debt from 7b.0 that 7b.3 must clear.** The flags writer is document-agnostic and handles a
+`JournalEntry` unchanged, but **nothing has ever exercised that branch** — every flag write so far
+has been to a `JournalEntryPage`. 7b.3 is the first journal-level flag writer, so **its gate must
+cover the JournalEntry path directly.** Do not assume it works because the page path passed.
 
-⚠️ **Debt from 7b.0 that 7b.3 must clear:** the flags writer is document-agnostic and handles a
-`JournalEntry` unchanged, but **nothing exercises that branch yet**. 7b.3 declares the six journal
-keys (`timeScale`, `dynamicTimeScale`, `negativeAbb`, `positiveAbb`, `showMinus`, `content` — read
-from `TimelineJournalConfig.js` and now surfaced by `get-timeline`) and its gate has to cover the
-JournalEntry path. Do not assume it works because the page path passed.
+**Two gate rules 7b.3 should reuse, both earned this session:**
 
-**Deploy state:** backend and module artifacts on disk match HEAD, verified by content. The backend
-runs from `node backend.bundle.cjs` in the installed dist directory; a Claude Desktop restart reuses
-it via the lock file. Both stdio wrappers were redeployed together.
+- **Call with no arguments** and assert the flags are unchanged rather than reset to defaults. A
+  config writer that helpfully fills in `timeScale: 10` would silently retune an existing timeline.
+- **Away and back on `timeScale`, then confirm in the UI that the axis actually rescales.** Reading
+  the flag back proves storage, not effect — and this session proved three separate times that the
+  API response can be perfectly correct while the render is wrong.
+
+**Then 7b.4 `set-quest-counter`** (58 → 59), blocked on nothing but sequencing; its `relativeTo: era`
+split-brain is already settled. **7b.5 `@time` stays ⛔ blocked** pending Franklin's own evaluation of
+Simple Timekeeping — installed is not unblocked. **Then 7z**, the GM-facing guide, in the play vault.
 
 ⚠️ **A Foundry socket reconnect is not a module reload.** Refresh Foundry (F5) after any module
-deploy, before any gate that touches module-side code. This bit twice in Session 14, which is why
-**both** new gates open with a freshness probe that exits rather than report a result on stale code.
-Keep doing that.
+deploy, before any gate touching module-side code. Every gate here opens with a **freshness probe**
+that exits rather than report a result on stale code. Keep doing that.
 
-**Housekeeping — one fixture.** `MCP Gate 7b1pre (safe to delete)` (`eFqBp8QXhPEGG32C`), 11 pages, in
-the **`Timeline`** special folder, so Simple Quest renders it as a second timeline in the UI. It is a
-**purpose-built 7b.2 fixture** and worth keeping until that cycle is gated: adjacent eras at −100..0,
-0..100 and 100..200, an endless 300..null, and a 400..1000 tail that keeps the axis height positive
-so the view can scroll; events at 100 (on an eraStart, contained), 150 ×2,
-200 (on an exclusive eraEnd, orphaned), 250 (outside every era, orphaned) and one with no year
-(placed in 0..100). Also one quest page left over from the coercion gate. The earlier
-`MCP Gate 7b.0` journal is already gone. There is still **no journal-delete tool**, and adding one was
-declined on purpose.
+⚠️ **Do the UI confirmation.** Three of 7b.1's six findings were invisible in the tool response and
+only appeared on screen, after the API gate already read 15/15. If a tool describes something a
+person looks at, look at it.
 
-**After 7b's tools ship, do 7z** — the GM-facing usage documentation, agreed 2026-08-17. It lives in
-the play vault as a skill and is the last deliverable of the phase.
+**Deploy state:** backend and module artifacts on disk match HEAD, verified by content. The backend
+runs from `node backend.bundle.cjs` in the installed dist directory. Both stdio wrappers redeployed
+together. **57 tools** on the control port.
+
+**Housekeeping — three disposable journals, none of them content.** They are all still useful
+fixtures and there is deliberately **no journal-delete tool**:
+
+- `MCP Gate 7b1pre (safe to delete)` (`eFqBp8QXhPEGG32C`) in **Timeline** — the 7b.1 fixture.
+  Adjacent eras −100..0, 0..100, 100..200, an endless 300..null and a 400..1000 tail that keeps the
+  axis positive; events at 100, 150 ×2, 200, 250 and one yearless. It renders deliberately wrong.
+  **The 7b.1 gate asserts an exact orphan set against it, so do not add events to it.**
+- `MCP Gate 7b2 (safe to delete)` in **Timeline** — the 7b.2 fixture, eras 0..100, 100..200, 300..400.
+- `MCP Gate 7b2 NotATimeline (safe to delete)` in **Quests** — the outside-the-folder control.
 
 ---
 
-#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 done 2026-08-21, 7b.2 next**
+#### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 + 7b.2 done 2026-08-21, 7b.3 next**
 
 > **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
 > surface listed further down: **`event`/`era` timeline** (the campaign involves history and dated
@@ -2921,6 +2927,48 @@ that never co-occurred.
 The harness opens with a **freshness probe** that exits rather than report on a browser still running
 the old module. Same pattern as the coercion gate, and worth keeping in every module-side gate.
 
+##### ✅ 7b.2 — containment guard on create/update **DONE 2026-08-21, gate 9/9 (no new tool, still 57)**
+
+`create-simple-quest-page` and `update-simple-quest-page` now return a `timeline` block for
+`event` and `era` pages: whether the page will actually render, which era it landed in, the era's
+own layout numbers, every layout warning naming that page, and the journal's currently stranded
+events. **It warns and never refuses** — writing events before their eras exist is a legitimate prep
+order, so blocking it would fight the workflow. But a write must not come back looking clean when the
+page it just wrote will never be drawn. That is the same false success this project keeps shipping,
+one layer up.
+
+**The design constraint was that the write path must not restate containment.** `getTimeline`'s
+analysis is extracted into a private `analyseTimeline(journal, moduleId)` — 231 lines, moved
+wholesale — and both the read tool and the write guard call it. A second implementation of the
+containment rule would drift from the first on the next Simple Quest release, and the two would then
+disagree about the same page. Gate check 9 asserts they agree: every page the write path called
+orphaned is orphaned in `get-timeline`, and every page it called placed is not. The folder walk was
+extracted the same way, into `timelineFolderInfo`.
+
+Re-running the full 7b.1 gate (20/20) after the extraction is the regression check on the refactor.
+
+##### Gate 9/9, live, 2026-08-21
+
+The gate **builds its own journal** rather than reusing the 7b.1 fixture. 7b.1 asserts an exact
+orphan set and there is no page-delete tool, so creating events in that journal would have broken
+that gate permanently. Its eras are `0..100`, `100..200` and `300..400` — an adjacent pair plus a gap,
+so the boundary check can fail.
+
+| #   | Check that can actually fail                                                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | an event created inside an era reports contained + the era name, and emits **no** warnings                                                                                                              |
+| 2   | **the point of the cycle:** an event dated in no era is created **successfully** and warned about. A refusal here fails the workflow, so the check is that it wrote _and_ reported, not that it blocked |
+| 3   | year 200 on an exclusive `eraEnd` warns; year 100 on an `eraStart` lands in the **later** era and stays silent                                                                                          |
+| 4   | a yearless event is reported **contained** and still warned — it is not excluded, it is silently dated to year 0                                                                                        |
+| 5   | **away and back:** moving an event out of every era warns, moving it back clears the warning. A guard that always warns proves nothing                                                                  |
+| 6   | writing an era surfaces its own null-end problem _and_ lists the events still stranded in that journal                                                                                                  |
+| 7   | **branch not otherwise taken:** a quest page gets no `timeline` block at all                                                                                                                            |
+| 8   | an event written outside the Timeline folder warns that nothing in that journal renders                                                                                                                 |
+| 9   | the write path and the read path agree about every page — the reason the guard calls `analyseTimeline` instead of restating the rule                                                                    |
+
+Check 8 creates its own throwaway journal in `Quests` rather than writing into a real Simple Quest
+content journal.
+
 ##### Cycles
 
 **7b.0 — Flags foundation (no new tools). ✅ DONE, gate passed 10/10 + UI confirmed 2026-08-18.** A write path for `flags['simple-quest']` on both
@@ -2937,7 +2985,7 @@ sorted by `eraStart`, events sorted by `year`, each event resolved to its contai
 trap visible. Also returns the journal's axis flags and each page's `uuid`, which is what
 cross-link emission needs.
 
-**7b.2 — Containment guard on create/update.** When an `event` is written, report whether it lands in
+**7b.2 — Containment guard on create/update. DONE 2026-08-21, gate 9/9 (no new tool).** When an `event` is written, report whether it lands in
 an era. **Warn, do not refuse:** writing events before their eras exist is a legitimate prep order, so
 a refusal would fight the workflow. But the response must say so plainly, and `get-timeline` must list
 it. Same for an `era` written with a null `eraEnd`, and for a **yearless** event (`year: null`), which

@@ -4204,117 +4204,130 @@ export class FoundryDataAccess {
   }
 
   /**
-   * Read a Simple Quest timeline the way the module renders it, and say what is invisible.
+   * The Simple Quest timeline directory and every journal inside it.
    *
-   * `Timeline._prepareContext` (Timeline.js L41-165) is **reproduced, not approximated** —
-   * coercions included — because the point of this tool is to report what the module does,
-   * not what it ought to do. Four behaviours are load-bearing:
-   *
-   * - **Containment is exclusive at the end** (L117 `year >= eraStart && year < eraEnd`) and
-   *   a miss is a bare `continue`. An uncontained event renders nowhere while every field on
-   *   it reads back correctly, which is what makes it invisible rather than broken.
-   * - **`null` coerces to `0` in that comparison.** An era with no `eraEnd` behaves as if it
-   *   ended at year 0 — it still captures negative years — and an event with no `year`
-   *   behaves as if dated 0. Neither is excluded; both are silently relocated.
-   * - **Era sizing (L68) is inclusive** while placement (L117) is exclusive, so a
-   *   boundary-dated event inflates its era's height and is then never drawn.
-   * - **Eras are permission-filtered before events are placed** (L60-62). Hiding an era
-   *   therefore hides every visible event inside it, on the player's client only.
-   *
-   * A journal is a timeline **only by living in the `timeline` special folder**
-   * (SimpleQuest.js L965-975, recursive through subfolders). There is no marker flag, so a
-   * journal full of era and event pages anywhere else never renders at all.
+   * The directory is identified by its `simpleQuestDir` flag, never by name, and the walk is
+   * recursive because `SimpleQuest.js` L965-975 descends into subfolders. Membership is the
+   * *only* thing that makes a journal a timeline — there is no marker flag on the journal —
+   * so a journal of era and event pages outside this tree renders nothing at all.
    */
-  async getTimeline(request: {
-    journalId?: string | undefined;
-    journalName?: string | undefined;
-  }): Promise<Record<string, unknown>> {
-    this.validateFoundryState();
-
-    const moduleId = 'simple-quest';
-    const module = game.modules?.get(moduleId);
-    if (!module?.active) {
-      return {
-        success: false,
-        message: `The "${moduleId}" module is not active in this world; it has no timelines.`,
-      };
-    }
-
-    // The timeline directory is identified by its flag, never by its name.
+  private timelineFolderInfo(moduleId: string): { folder: any; journalIds: Set<string> } {
     const journalFolders = Array.from<any>(game.folders ?? []).filter(
       (f: any) => f.type === 'JournalEntry'
     );
-    const timelineFolder = journalFolders.find(
+    const folder = journalFolders.find(
       (f: any) => f.getFlag?.(moduleId, 'simpleQuestDir') === 'timeline'
     );
-
-    const timelineJournalIds = new Set<string>();
-    const collect = (folder: any): void => {
-      if (!folder) return;
-      for (const j of folder.contents ?? []) timelineJournalIds.add(j.id);
-      for (const sub of folder.children ?? []) collect(sub?.folder);
+    const journalIds = new Set<string>();
+    const collect = (fo: any): void => {
+      if (!fo) return;
+      for (const j of fo.contents ?? []) journalIds.add(j.id);
+      for (const sub of fo.children ?? []) collect(sub?.folder);
     };
-    collect(timelineFolder);
-    const timelineJournals = Array.from(timelineJournalIds)
-      .map((id: string) => game.journal.get(id))
-      .filter(Boolean)
-      .map((j: any) => ({ id: j.id, name: j.name }));
+    collect(folder);
+    return { folder, journalIds };
+  }
 
-    // ---- resolve the journal ---------------------------------------------------------
-    let journal: any = null;
-    let resolvedBy: string;
+  /**
+   * What writing this page means for the timeline. Attached to the create and update
+   * responses for `era` and `event` pages; `undefined` for every other type.
+   *
+   * **Warns, never refuses.** Writing events before their eras exist is a legitimate prep
+   * order and a refusal would fight the workflow. But the write must not come back looking
+   * clean when the page it just wrote will not render — that is the same false success this
+   * project keeps shipping, one layer up.
+   *
+   * Runs the *read* path's analysis (`analyseTimeline`) rather than repeating its rules, so
+   * a write and a subsequent `get-timeline` can never disagree about the same page.
+   */
+  private assessTimelineWrite(
+    journal: any,
+    page: any,
+    moduleId: string
+  ): Record<string, unknown> | undefined {
+    const type = page?.type;
+    const isEvent = type === `${moduleId}.event`;
+    const isEra = type === `${moduleId}.era`;
+    if (!isEvent && !isEra) return undefined;
 
-    if (request.journalId) {
-      journal = game.journal.get(request.journalId);
-      if (!journal) {
-        return { success: false, message: `Journal not found: ${request.journalId}` };
-      }
-      resolvedBy = 'journalId';
-    } else if (request.journalName) {
-      // Exact match only. Resolving a document by "contains" is the defect this project has
-      // now shipped five times.
-      const matches = Array.from<any>(game.journal ?? []).filter(
-        (j: any) => j.name === request.journalName
+    const { folder: timelineFolder, journalIds } = this.timelineFolderInfo(moduleId);
+    const journalIsTimeline = journalIds.has(journal.id);
+
+    const a = this.analyseTimeline(journal, moduleId);
+    const warnings: string[] = [];
+    const result: Record<string, unknown> = { pageType: type, journalIsTimeline };
+
+    if (!journalIsTimeline) {
+      warnings.push(
+        `The journal "${journal.name}" is not in the Simple Quest timeline folder` +
+          `${timelineFolder ? ` ("${timelineFolder.name}")` : ', which does not exist'}. ` +
+          `Simple Quest decides what is a timeline by folder alone, so nothing in this ` +
+          `journal renders as one until it is moved there.`
       );
-      if (matches.length === 0) {
-        return {
-          success: false,
-          message:
-            `No journal is named exactly "${request.journalName}". Timeline journals: ` +
-            `${timelineJournals.map(j => `"${j.name}"`).join(', ') || 'none'}.`,
-        };
-      }
-      if (matches.length > 1) {
-        return {
-          success: false,
-          message:
-            `${matches.length} journals are named "${request.journalName}"; pass journalId ` +
-            `instead: ${matches.map((j: any) => j.id).join(', ')}.`,
-        };
-      }
-      journal = matches[0];
-      resolvedBy = 'journalName';
-    } else if (timelineJournals.length === 1) {
-      // Defaulting to the only candidate is a lookup that succeeded, not a silent fallback,
-      // and the response says which it was.
-      journal = game.journal.get(timelineJournals[0]!.id);
-      resolvedBy = 'only-timeline-journal';
-    } else {
-      return {
-        success: false,
-        timelineJournals,
-        message:
-          timelineJournals.length === 0
-            ? `No journals are in the Simple Quest timeline folder${
-                timelineFolder ? ` ("${timelineFolder.name}")` : ', which does not exist'
-              }.`
-            : `${timelineJournals.length} timeline journals exist; name one with journalId ` +
-              `or journalName: ${timelineJournals.map(j => `"${j.name}" (${j.id})`).join(', ')}.`,
-      };
     }
 
-    const inTimelineFolder = timelineJournalIds.has(journal.id);
+    if (isEvent) {
+      const hit = a.gm.placed.find((x: any) => x.ev.id === page.id);
+      result.contained = !!hit;
+      result.era = hit ? hit.era.name : null;
+      result.year = page.system?.year ?? null;
 
+      if (!hit) {
+        const reason = a.orphanReason(page, a.eras);
+        result.reason = reason;
+        warnings.push(`This event will NOT appear on the timeline: ${reason}`);
+      } else if (page.system?.year === null || page.system?.year === undefined) {
+        // Contained, but only because null compares as 0 — almost never what was meant.
+        warnings.push(
+          `This event has no year. It is not excluded: Simple Quest compares null as 0, so ` +
+            `it renders inside "${hit.era.name}" as though dated year 0. Set a year unless ` +
+            `that is intended.`
+        );
+      }
+    } else {
+      const era = a.eras.find((e: any) => e.id === page.id);
+      const layout = era ? a.eraLayout.get(era) : undefined;
+      result.eraStart = era?.system?.eraStart ?? null;
+      result.eraEnd = era?.system?.eraEnd ?? null;
+      result.displayedEnd = layout?.displayedEnd ?? null;
+      result.eventsPlaced = era ? a.gm.placed.filter((x: any) => x.era === era).length : 0;
+      result.heightPx = era ? (a.eraHeights.get(era) ?? null) : null;
+    }
+
+    // Every layout warning that names this page. They are already phrased for a reader.
+    for (const w of a.layoutWarnings) {
+      if (w.includes(`"${page.name}"`) && !warnings.includes(w)) warnings.push(w);
+    }
+
+    // Writing an era can orphan or rescue events elsewhere in the journal, and writing an
+    // event says nothing about the ones already stranded. Always show the blast radius.
+    if (a.gm.orphaned.length > 0) {
+      result.journalOrphanedEvents = a.gm.orphaned.map((ev: any) => ({
+        name: ev.name,
+        year: ev.system?.year ?? null,
+        reason: a.orphanReason(ev, a.eras),
+      }));
+      if (isEra) {
+        warnings.push(
+          `${a.gm.orphaned.length} event(s) in this journal still land in no era and will not ` +
+            `render: ${a.gm.orphaned.map((e: any) => `"${e.name}"`).join(', ')}.`
+        );
+      }
+    }
+
+    result.totalHeight = a.totalHeight;
+    if (warnings.length > 0) result.warnings = warnings;
+    return result;
+  }
+
+  /**
+   * Every timeline judgement for one journal: what renders, what does not, and why.
+   *
+   * Extracted from `getTimeline` in 7b.2 so the **write** path can reach the same verdicts
+   * the read path reports. A second implementation of containment would drift from this one
+   * on the next Simple Quest release, and the two would disagree about the same page.
+   */
+  private analyseTimeline(journal: any, moduleId: string) {
     // ---- axis configuration, with Simple Quest's own defaults ------------------------
     const flag = (k: string): any => journal.getFlag?.(moduleId, k);
     const timeScale = (flag('timeScale') as number) ?? 10;
@@ -4545,6 +4558,142 @@ export class FoundryDataAccess {
     const playerOnlyOrphans = player.orphaned.filter((e: any) => !gmOrphanIds.has(e.id));
     const hiddenEras = eras.filter((e: any) => !playerVisible(e));
     const hiddenEvents = events.filter((e: any) => !playerVisible(e));
+
+    return {
+      config,
+      eras,
+      events,
+      playerVisible,
+      orphanReason,
+      gm,
+      playerEras,
+      playerEvents,
+      layoutWarnings,
+      eraHeights,
+      eraLayout,
+      totalHeight,
+      playerOnlyOrphans,
+      hiddenEras,
+      hiddenEvents,
+    };
+  }
+
+  /**
+   * Read a Simple Quest timeline the way the module renders it, and say what is invisible.
+   *
+   * `Timeline._prepareContext` (Timeline.js L41-165) is **reproduced, not approximated** —
+   * coercions included — because the point of this tool is to report what the module does,
+   * not what it ought to do. Four behaviours are load-bearing:
+   *
+   * - **Containment is exclusive at the end** (L117 `year >= eraStart && year < eraEnd`) and
+   *   a miss is a bare `continue`. An uncontained event renders nowhere while every field on
+   *   it reads back correctly, which is what makes it invisible rather than broken.
+   * - **`null` coerces to `0` in that comparison.** An era with no `eraEnd` behaves as if it
+   *   ended at year 0 — it still captures negative years — and an event with no `year`
+   *   behaves as if dated 0. Neither is excluded; both are silently relocated.
+   * - **Era sizing (L68) is inclusive** while placement (L117) is exclusive, so a
+   *   boundary-dated event inflates its era's height and is then never drawn.
+   * - **Eras are permission-filtered before events are placed** (L60-62). Hiding an era
+   *   therefore hides every visible event inside it, on the player's client only.
+   *
+   * A journal is a timeline **only by living in the `timeline` special folder**
+   * (SimpleQuest.js L965-975, recursive through subfolders). There is no marker flag, so a
+   * journal full of era and event pages anywhere else never renders at all.
+   */
+  async getTimeline(request: {
+    journalId?: string | undefined;
+    journalName?: string | undefined;
+  }): Promise<Record<string, unknown>> {
+    this.validateFoundryState();
+
+    const moduleId = 'simple-quest';
+    const module = game.modules?.get(moduleId);
+    if (!module?.active) {
+      return {
+        success: false,
+        message: `The "${moduleId}" module is not active in this world; it has no timelines.`,
+      };
+    }
+
+    const { folder: timelineFolder, journalIds: timelineJournalIds } =
+      this.timelineFolderInfo(moduleId);
+    const timelineJournals = Array.from(timelineJournalIds)
+      .map((id: string) => game.journal.get(id))
+      .filter(Boolean)
+      .map((j: any) => ({ id: j.id, name: j.name }));
+
+    // ---- resolve the journal ---------------------------------------------------------
+    let journal: any = null;
+    let resolvedBy: string;
+
+    if (request.journalId) {
+      journal = game.journal.get(request.journalId);
+      if (!journal) {
+        return { success: false, message: `Journal not found: ${request.journalId}` };
+      }
+      resolvedBy = 'journalId';
+    } else if (request.journalName) {
+      // Exact match only. Resolving a document by "contains" is the defect this project has
+      // now shipped five times.
+      const matches = Array.from<any>(game.journal ?? []).filter(
+        (j: any) => j.name === request.journalName
+      );
+      if (matches.length === 0) {
+        return {
+          success: false,
+          message:
+            `No journal is named exactly "${request.journalName}". Timeline journals: ` +
+            `${timelineJournals.map(j => `"${j.name}"`).join(', ') || 'none'}.`,
+        };
+      }
+      if (matches.length > 1) {
+        return {
+          success: false,
+          message:
+            `${matches.length} journals are named "${request.journalName}"; pass journalId ` +
+            `instead: ${matches.map((j: any) => j.id).join(', ')}.`,
+        };
+      }
+      journal = matches[0];
+      resolvedBy = 'journalName';
+    } else if (timelineJournals.length === 1) {
+      // Defaulting to the only candidate is a lookup that succeeded, not a silent fallback,
+      // and the response says which it was.
+      journal = game.journal.get(timelineJournals[0]!.id);
+      resolvedBy = 'only-timeline-journal';
+    } else {
+      return {
+        success: false,
+        timelineJournals,
+        message:
+          timelineJournals.length === 0
+            ? `No journals are in the Simple Quest timeline folder${
+                timelineFolder ? ` ("${timelineFolder.name}")` : ', which does not exist'
+              }.`
+            : `${timelineJournals.length} timeline journals exist; name one with journalId ` +
+              `or journalName: ${timelineJournals.map(j => `"${j.name}" (${j.id})`).join(', ')}.`,
+      };
+    }
+
+    const inTimelineFolder = timelineJournalIds.has(journal.id);
+
+    const {
+      config,
+      eras,
+      events,
+      playerVisible,
+      orphanReason,
+      gm,
+      playerEras,
+      playerEvents,
+      layoutWarnings,
+      eraHeights,
+      eraLayout,
+      totalHeight,
+      playerOnlyOrphans,
+      hiddenEras,
+      hiddenEvents,
+    } = this.analyseTimeline(journal, moduleId);
 
     return {
       success: true,
@@ -4812,6 +4961,10 @@ export class FoundryDataAccess {
         }
       }
 
+      // Assessed after the write, against the stored document, so it reflects what Simple
+      // Quest will actually draw rather than what was requested.
+      const timelineAssessment = this.assessTimelineWrite(journal, page, moduleId);
+
       this.auditLog('createSimpleQuestPage', request, 'success');
 
       return {
@@ -4829,6 +4982,8 @@ export class FoundryDataAccess {
         secretsApplied,
         ...(objectives ? { objectives } : {}),
         ...(ownershipNote ? { ownershipNote } : {}),
+        // 7b.2 — warn, never refuse. Only present for era/event pages.
+        ...(timelineAssessment ? { timeline: timelineAssessment } : {}),
       };
     } catch (error) {
       this.auditLog(
@@ -5093,6 +5248,8 @@ export class FoundryDataAccess {
         }
       }
 
+      const timelineAssessment = this.assessTimelineWrite(journal, page, 'simple-quest');
+
       this.auditLog('updateSimpleQuestPage', request, 'success');
 
       return {
@@ -5108,6 +5265,8 @@ export class FoundryDataAccess {
           ? { objectives: await this.parseQuestObjectives(page) }
           : {}),
         ...(orphanWarning ? { orphanWarning } : {}),
+        // 7b.2 — warn, never refuse. Only present for era/event pages.
+        ...(timelineAssessment ? { timeline: timelineAssessment } : {}),
       };
     } catch (error) {
       this.auditLog(
