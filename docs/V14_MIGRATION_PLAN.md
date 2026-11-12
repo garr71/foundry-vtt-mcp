@@ -3227,11 +3227,11 @@ truth that drifts.
 **Home, corrected 2026-08-20.** The earlier framing (2026-08-17) put the document in the **dev
 vault** as the single source of truth, propagated or cross-referenced into the pf2e game vault so it
 never forks. **Superseded, because it assumed the document needed to exist in both places.** The two
-vaults have different jobs: `Z:\Obsidian Vaults\FoundryDevVault` (on the NAS) is dev-only research,
-architecture and session logs, while `C:\Vaults\PF2eFoundryVault` is where play happens. The GM
+vaults have different jobs: `N:\Vaults\FoundryDevVault` (on the Nexus DAS) is dev-only research,
+architecture and session logs, while `N:\Vaults\PF2eFoundryVault` is where play happens. The GM
 guide is a **play** artifact with exactly one consumer (the play session), so:
 
-**It lives in the play vault, as a skill: `C:\Vaults\PF2eFoundryVault\.claude\skills\<name>`.** Written
+**It lives in the play vault, as a skill: `N:\Vaults\PF2eFoundryVault\.claude\skills\<name>`.** Written
 once, no copy, no link. `.claude/skills/session-start` already exists there, so this is a second
 skill in a working directory, not new plumbing. The play vault is also local and git-versioned,
 which the dev vault is not — a guide on the NAS would make a live session depend on the NAS being
@@ -3287,7 +3287,7 @@ Desktop cannot read a vault file at all without a filesystem MCP server alongsid
 and a pointer it cannot follow is no delivery mechanism.
 
 **Answer: Claude Desktop is the _test harness only_. Real play is `claude` (Claude Code) spawned from
-`C:\Vaults\PF2eFoundryVault`,** which reads `CLAUDE.md` natively, supports skills, and has the vault
+`N:\Vaults\PF2eFoundryVault`,** which reads `CLAUDE.md` natively, supports skills, and has the vault
 as its cwd. Both mechanisms proposed above therefore work, including the stronger one (a skill that
 _mandates_ the read). Verified on disk in that vault: `.mcp.json` wires the `foundry-mcp` server to
 the installed `index.bundle.cjs` on port 31415; `.claude/settings.local.json` allows
@@ -3929,7 +3929,7 @@ one:
 | Client                    | Launches                | Configured in                          |
 | ------------------------- | ----------------------- | -------------------------------------- |
 | Claude Desktop (**test**) | `dist/index.cjs`        | `claude_desktop_config.json`           |
-| Claude Code (**play**)    | `dist/index.bundle.cjs` | `C:\Vaults\PF2eFoundryVault\.mcp.json` |
+| Claude Code (**play**)    | `dist/index.bundle.cjs` | `N:\Vaults\PF2eFoundryVault\.mcp.json` |
 
 They are **separate files, not a shim and a target** — same 484,749 bytes and same md5
 (`db24f629632493042f43502f79c0a3a7`) as of 2026-08-20, but with **mtimes three days apart**:
