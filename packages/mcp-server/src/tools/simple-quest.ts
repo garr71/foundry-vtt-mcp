@@ -13,7 +13,7 @@ export interface SimpleQuestToolsOptions {
  * Simple Quest is the campaign's living layer: what happened at the table, plus light prep
  * on places, factions and timeline. Premium adventure modules ship their own adorned
  * journals; those are read-only source material and are never written to. See
- * docs/V14_MIGRATION_PLAN.md, Phase 7a.
+ * docs/archive/V14_MIGRATION_PLAN.md, Phase 7a.
  */
 export class SimpleQuestTools {
   private foundryClient: FoundryClient;

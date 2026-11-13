@@ -14,7 +14,7 @@ export interface JournalToolsOptions {
  * `set-quest-checklist-item`. Both are hard-dependent on the Simple Quest module, which
  * changed storage layers between 3.0.20 and 5.1.4, so re-landing them is a rebuild rather
  * than a re-port. They are deliberately omitted here and scheduled for Phase 7a.
- * See docs/V14_MIGRATION_PLAN.md.
+ * See docs/archive/V14_MIGRATION_PLAN.md.
  */
 export class JournalTools {
   private foundryClient: FoundryClient;

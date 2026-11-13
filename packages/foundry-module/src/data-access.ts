@@ -1663,7 +1663,7 @@ const SIMPLE_QUEST_FLAG_SCOPE = 'simple-quest';
 /*
  * Timeline axis configuration lives on the **JournalEntry** (six keys: timeScale,
  * dynamicTimeScale, negativeAbb, positiveAbb, showMinus, content — see the 7b.3 section of
- * V14_MIGRATION_PLAN.md for the verified source lines). The writer below is document-
+ * docs/archive/V14_MIGRATION_PLAN.md for the verified source lines). The writer below is document-
  * agnostic and already handles a JournalEntry, but the journal key set is declared by
  * `set-timeline-config` in 7b.3 rather than here, so that each caller owns its own list.
  */

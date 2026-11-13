@@ -1,5 +1,11 @@
 # Foundry v14 Migration + Upstream Re-Sync Plan
 
+> **📦 ARCHIVED 2026-11-13.** This migration finished on 2026-08-22 (Phase 7 complete, 59 tools).
+> It stays here unchanged as the **record of history and rationale**: port inventory, gate results,
+> and the reasoning behind every decision. Sections such as "START HERE NEXT SESSION" are stale.
+> **Current work lives in [`docs/PLAN.md`](../PLAN.md)**, which carries forward the still-open
+> backlog from Phase 7.
+
 > **Purpose:** Re-fork cleanly onto current upstream (Foundry **v14** + native **pf2e** adapter),
 > then re-port our system-agnostic custom tools on top, one phase at a time.
 > Pivoting from sf2e → **pf2e**, so the sf2e-specific code is deferred.
