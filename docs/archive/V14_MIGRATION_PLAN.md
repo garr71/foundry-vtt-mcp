@@ -63,7 +63,7 @@
 
 - **Old Foundry v13 data:** `D:\FoundryVTTdata` (legacy `foundry-mcp-bridge` lives here)
 - **New Foundry v14 data:** `D:\FoundryData-Paizo` (pf2e/sf2e; the module goes here)
-- **Installed MCP server:** `C:\Users\Franklin Figueroa\AppData\Local\FoundryMCPServer\`
+- **Installed MCP server:** `%LOCALAPPDATA%\FoundryMCPServer\`
 - **Simple Quest:** v13 world has **3.0.20**, v14 world has **5.1.4** (breaking, see Phase 7a)
 
 ### Strategy decisions
@@ -229,7 +229,7 @@ in that file is ours.
 
 ## Module dependency sweep (2026-08-13)
 
-Franklin's call: **make the fork whole first, then recheck the module-dependent tools fresh.** This
+The maintainer's call: **make the fork whole first, then recheck the module-dependent tools fresh.** This
 sweep decides what that means concretely. It was built by grepping the port source for
 `game.modules.get(...)` guards, **not** by reading the plan — the plan's prose about modules has
 now been wrong three times running.
@@ -745,7 +745,7 @@ server-side, so this is a routing problem, not a data problem. But it would have
 phase to re-derive rather than re-port, with five phases of unported tools still ahead. Get the
 fork whole first, refactor from a known-good state. **Filed for after Phase 6.**
 
-Franklin scoped it explicitly: pf2e and sf2e only for now. mgt2e / wfrp4e / dsa5 / cosmere still
+The maintainer scoped it explicitly: pf2e and sf2e only for now. mgt2e / wfrp4e / dsa5 / cosmere still
 fall through to the 5e path and still roll flat on skills. Not a regression, just not addressed.
 
 #### Deviation from a faithful port: `warnOnMissingModifier`
@@ -986,7 +986,7 @@ Check 1 returned `mode: "soundboard"` for **all four** playlists (Ambience, Ambi
 SFX). That was not the expected result, and it retroactively raises the value of two fixes:
 
 - **Row 2 would have mislabelled 100% of the library.** `master`'s `playlistModeName` has a `case 3`
-  and no `-1`, so every playlist Franklin owns would have reported `"unknown"` in `list-playlists`,
+  and no `-1`, so every playlist the maintainer owns would have reported `"unknown"` in `list-playlists`,
   silently and permanently.
 - **The `playAll()` no-op branch would have failed every whole-playlist call.** `master` returns a
   confident `Playing playlist "X".` and produces silence on a DISABLED playlist. Since _every_
@@ -1110,7 +1110,7 @@ merely imperfect.** Rows 1-3 were forced; this is a presentation choice with a r
 > **⚠️ Rescoped in revision 4.** The stat block is **two-sided** and revision 3 listed only the
 > server half. Porting row 3 without row 4 ships a formatter for a payload the module never sends.
 
-> **Deployed as one cycle**, all three surfaces together, on Franklin's call 2026-08-13. The
+> **Deployed as one cycle**, all three surfaces together, on the maintainer's call 2026-08-13. The
 > `CLAUDE.md` one-tool cadence was set aside deliberately: the three changes share no code path,
 > each gate check is a single tool call, and the phase's headline risk (`measurePath`) was
 > **de-risked by reading the v14 source before writing**, so the "1-2 fix cycles" budget below
@@ -1558,7 +1558,7 @@ to change. Same before/after discipline as the RST reproduction in Phase 4.
 
 #### 🔒 MCP cannot create a Simple Quest quest page — scoping constraint for 7a
 
-Franklin, 2026-08-15: _"Simple Quest ONLY reads quests created inside of it."_ Structurally true
+The maintainer, 2026-08-15: _"Simple Quest ONLY reads quests created inside of it."_ Structurally true
 from our side as well: `updateJournalContent`'s create path hardcodes `type: 'text'`
 ([`data-access.ts`](../packages/foundry-module/src/data-access.ts), mode 1), and
 `create-quest-journal` makes an ordinary `JournalEntry`. **Nothing MCP creates can ever be a
@@ -1605,7 +1605,7 @@ Phase 7 can do this properly by remapping state onto the new keys. Phase 5 just 
 
 - [x] Archive branches created **first**, and SHA-verified against the originals, before anything
       moved. `archive/master-sf2e-v13` → `fd66b9a`, `archive/v14-port-v082` → `8dc4f59`.
-- [x] Make `v14-port-v083` the new `master` — confirmed by Franklin, then `git branch -f master`.
+- [x] Make `v14-port-v083` the new `master` — confirmed by the maintainer, then `git branch -f master`.
       `master` and `v14-port-v083` now both point at `4008b12`.
 - [x] Update `CLAUDE.md`: v14/pf2e state, 51-tool count, ported-vs-parked list, corrected commands,
       control-port verification, the gate-design rules, and the audit-script workflow.
@@ -1623,7 +1623,7 @@ Phase 7 can do this properly by remapping state onto the new keys. Phase 5 just 
 
 #### ✅ Published 2026-08-15, archives first
 
-Franklin authorised the publish after the promotion. Local `master` had reported **ahead 116,
+The maintainer authorised the publish after the promotion. Local `master` had reported **ahead 116,
 behind 14** of `origin/master` — different lineages rather than divergent histories, which is what
 re-forking produces. The merge base is `62cd3fb`, the original fork point; the "14 behind" are the
 sf2e line's own custom-tool commits, i.e. exactly the work this migration re-ported by hand.
@@ -1663,7 +1663,7 @@ commits unreachable from any branch. Ordering was the whole safety margin.
 **Goal:** Everything whose correctness depends on a **third-party module we do not control**. Runs
 _after_ the fork is whole and promoted, so module churn can never block the migration itself.
 
-**Why this phase exists.** Franklin's call, 2026-08-13: make the fork whole first, then recheck the
+**Why this phase exists.** The maintainer's call, 2026-08-13: make the fork whole first, then recheck the
 module-dependent tools fresh, because those modules changed a lot. The Simple Quest investigation
 proved the point — three separate plan claims about SQ were wrong, each because the plan described
 3.0.20 behaviour that 5.1.4 no longer has. That work is **not a re-port**: there is no known-good
@@ -1672,7 +1672,7 @@ violate strategy decision 4 while looking like compliance.
 
 **Entry condition:** Phase 6 complete — fork whole, promoted, every core tool proven.
 
-> **Scope decision, 2026-08-15 (Franklin).** Run **7d first and alone**. Simple Quest (7a **and**
+> **Scope decision, 2026-08-15 (the maintainer).** Run **7d first and alone**. Simple Quest (7a **and**
 > 7b) is deferred until it gets its own analysis and plan, because 5.1.4 differs from 3.0.20 far
 > more than a re-port assumes — the same reasoning that created this phase. 7c is **parked on a
 > prerequisite**, see below. The `getJournalPageContent` reader fix stays with 7a: it is listed on
@@ -1685,7 +1685,7 @@ violate strategy decision 4 while looking like compliance.
 
 #### 7a — Simple Quest integration ⬜ **designed 2026-08-16, not started**
 
-> **Design session, 2026-08-16 (Franklin + Claude).** This section **supersedes** the 7a and 7b
+> **Design session, 2026-08-16 (the maintainer + Claude).** This section **supersedes** the 7a and 7b
 > checklists that stood here before it, and discharges the 2026-08-15 scope decision above ("Simple
 > Quest is deferred until it gets its own analysis and plan"). The old 7a listed
 > `set-quest-checklist-item` / `set-quest-visibility` as tools to rebuild; that framing came from
@@ -1695,14 +1695,14 @@ violate strategy decision 4 while looking like compliance.
 > Everything below was read from the installed 5.1.4 source on 2026-08-16, plus core v14 for the
 > two claims that depend on it. Citations are to files on disk.
 
-**What this is for.** Franklin's framing: premium pf2e modules ship their own adorned Foundry
+**What this is for.** The maintainer's framing: premium pf2e modules ship their own adorned Foundry
 journals carrying the adventure's prose and logic, written for the GM. Simple Quest is **not** a
 replacement for those. It is the **living campaign layer** — what actually happened at the table,
 plus light prep on places, factions and timeline — which the MCP assistant fills in during and
 after play. The assistant reads the module's journals for source material and **composes new SQ
 pages from them**.
 
-**🔒 Scope boundary (Franklin, 2026-08-16): never write into module journals.** Read and recompose
+**🔒 Scope boundary (the maintainer, 2026-08-16): never write into module journals.** Read and recompose
 only. No `ForcedReplacement`, no `page.update({type: ...})` promotion of a stock page, no content
 edits. Module journals frequently carry embedded macro triggers (scene switches and the like) and
 mutating a page's type or content can break that logic. Promotion is technically trivial (SQ's own
@@ -1782,7 +1782,7 @@ recorded further down, from the opposite direction.
 
 ##### The lifecycle this has to support
 
-Franklin's prep-then-reveal pattern, which is what drives the tool split:
+The maintainer's prep-then-reveal pattern, which is what drives the tool split:
 
 ```
 prep         create-simple-quest-page   page hidden · status -1 · objectives written but secret
@@ -1826,7 +1826,7 @@ rot silently; `exportAllSchemas()` cannot.
 > field names, instead of costing tokens in every session's tool list. Without this, build per-type
 > instead.
 
-**Split by gesture, not by data structure.** The two live-play tools divide the way Franklin's
+**Split by gesture, not by data structure.** The two live-play tools divide the way the maintainer's
 sentences divide, not the way the schema does:
 
 - `set-quest-progress` — "they finished the second objective", "the quest failed"
@@ -2059,7 +2059,7 @@ journal.
 
 ###### ⚠️ Page ownership inside a visible journal is a display boundary, not a security boundary
 
-Franklin spotted a bare `MCP GATE FIXTURE` header under "In Progress" on the **player** screen, with
+The maintainer spotted a bare `MCP GATE FIXTURE` header under "In Progress" on the **player** screen, with
 no page beneath it. Traced to `JournalBrowser.js` ~L325-339:
 
 ```js
@@ -2177,7 +2177,7 @@ SetField read path; this proves the write path.
 
 ##### 7a.2 gate result — 10/10, 2026-08-17 (`create-simple-quest-page`, 52 → 53 tools)
 
-Writes landed in the **Quests** folder at Franklin's direction (easy to delete afterwards).
+Writes landed in the **Quests** folder at the maintainer's direction (easy to delete afterwards).
 
 | #   | Check                                             | Result                                 |
 | --- | ------------------------------------------------- | -------------------------------------- |
@@ -2456,7 +2456,7 @@ nothing — the house failure mode, stated in the response instead of left to be
 plus the folder/tab structure (root + the five `simpleQuestDir`-flagged folders + tab folders with
 their icons). Read-only, cheap, and makes the write tools self-describing.
 
-**7a.2 — `create-simple-quest-page`. ✅ DONE, gate passed 10/10 2026-08-17.** One page per call, deliberately: Franklin batches at the
+**7a.2 — `create-simple-quest-page`. ✅ DONE, gate passed 10/10 2026-08-17.** One page per call, deliberately: the maintainer batches at the
 thinking/vault level, and one-at-a-time gives the assistant a chance to read back what it made and
 catch errors per page. Parameters: journal or folder target, `type`, `name`, `text`, `system`,
 optional `template` (by name, with real image paths substituted for the unsplash placeholder) and
@@ -2561,7 +2561,7 @@ cover the JournalEntry path directly.** Do not assume it works because the page 
   API response can be perfectly correct while the render is wrong.
 
 **Then 7b.4 `set-quest-counter`** (58 → 59), blocked on nothing but sequencing; its `relativeTo: era`
-split-brain is already settled. **7b.5 `@time` stays ⛔ blocked** pending Franklin's own evaluation of
+split-brain is already settled. **7b.5 `@time` stays ⛔ blocked** pending the maintainer's own evaluation of
 Simple Timekeeping — installed is not unblocked. **Then 7z**, the GM-facing guide, in the play vault.
 
 ⚠️ **A Foundry socket reconnect is not a module reload.** Refresh Foundry (F5) after any module
@@ -2590,9 +2590,9 @@ fixtures and there is deliberately **no journal-delete tool**:
 
 #### 7b — Timeline & enrichers 🕰️ 🔄 **designed 2026-08-17; 7b.0 done 2026-08-18, 7b.1 + 7b.2 done 2026-08-21, 7b.3 + 7b.4 done 2026-08-22; only 7b.5 (@time, blocked) remains**
 
-> **Design session, 2026-08-17 (Franklin + Claude).** Scopes the first tranche of the deferred
+> **Design session, 2026-08-17 (the maintainer + Claude).** Scopes the first tranche of the deferred
 > surface listed further down: **`event`/`era` timeline** (the campaign involves history and dated
-> events) and **custom enrichers**. `@time` is sequenced **last** at Franklin's direction — Simple
+> events) and **custom enrichers**. `@time` is sequenced **last** at the maintainer's direction — Simple
 > Timekeeping is not installed and he wants to evaluate it first, and per the standing rule a module
 > that is not installed cannot be gated.
 >
@@ -2759,7 +2759,7 @@ yet evidence.
 
 ##### ✅ The one failure — silent numeric coercion reported as success. **FIXED 2026-08-21, gate 11/11**
 
-> Found by this pre-flight, fixed the same session at Franklin's direction rather than waiting for
+> Found by this pre-flight, fixed the same session at the maintainer's direction rather than waiting for
 > 7b.2. No new tool; **still 56**. The write-up below is the diagnosis; the fix follows it.
 
 `year: 1.5` was stored as `2` and the call returned `success: true`. Root cause is core, confirmed in
@@ -3073,7 +3073,7 @@ Two further facts read from source this cycle:
 "Gate4 Event" rendered **(9 / 10)** — the ERA's value — from text that lives in the EVENT body. The
 split is no longer a source-reading claim.
 
-**Correction 1, from Franklin.** In timeline mode, clicking a page in the SQ browser sidebar only
+**Correction 1, from the maintainer.** In timeline mode, clicking a page in the SQ browser sidebar only
 **scrolls**: `Timeline.js` L174-181 binds `goTo(uuid)`, and clicking an era card calls
 `openToPage`, with `goTo` commented out. There is no page view to reach that way, so with both cards
 already on screen the click appears to do nothing. It is not broken. The event page sheet renders
@@ -3139,7 +3139,7 @@ pre-flight 3 showed is not orphaned at all but silently lands in whatever era sp
 counters in event bodies really do write to the era, the tool must target the page the enricher
 resolves against, not the page the text lives on, and say which.
 
-**7b.5 — `@time`. ❌ CANCELLED 2026-08-22, not deferred.** Franklin installed Simple Timekeeping to
+**7b.5 — `@time`. ❌ CANCELLED 2026-08-22, not deferred.** The maintainer installed Simple Timekeeping to
 evaluate it and declined it: its "Sync Weather & Darkness" option wrote darkness levels onto every
 scene it touched, and disabling the module left those values behind (his Landing scene needed
 `environment.darknessLevel` reset to 0 by hand). Separately, pf2e 8.4.1 registers no world calendar —
@@ -3190,16 +3190,16 @@ link, a visible embarrassment — so until then the tools should treat `@time` a
 covering all 14 Simple Quest and journal tools. The pointer in that vault's `CLAUDE.md` was updated
 to match.
 
-##### ⚠️ Two corrections to everything written below, both from Franklin on 2026-08-22
+##### ⚠️ Two corrections to everything written below, both from the maintainer on 2026-08-22
 
 **1. It is a plain file, not a skill.** This section spent two revisions deciding it should live in
-`.claude/skills/`. Franklin's question was simply _why_ — and there was no good answer. The play
+`.claude/skills/`. The maintainer's question was simply _why_ — and there was no good answer. The play
 vault's `CLAUDE.md` is loaded automatically every session and already carried the pointer, so a skill
 was machinery in front of a file that gets read anyway. The pointer mechanism this section settled on
 was right; the skill wrapper around it was not.
 
 **2. It is organized BY TOOL.** This section argued for organising "for a reader skimming to the
-answer" and explicitly rejected a Part A / Part B split. Franklin's framing is sharper: the consumer
+answer" and explicitly rejected a Part A / Part B split. The maintainer's framing is sharper: the consumer
 is an assistant about to make one specific call, so the lookup path should be _find the tool, read
 its entry_. The tool reference is now the spine of the document and the conceptual material sits
 behind it as shared sections the entries point into.
@@ -3212,7 +3212,7 @@ win.
 
 ##### A third thing this section did not anticipate
 
-**Most of the document already existed.** Franklin had written `Simple Quest Procedure.md` and wired
+**Most of the document already existed.** The maintainer had written `Simple Quest Procedure.md` and wired
 the `CLAUDE.md` pointer some days earlier. 7z was therefore not "write a guide" but "bring a good
 guide up to date and restructure it" — the file was a week stale: it listed 5 tools as built and 3 as
 unbuilt, told the reader to check the timeline by eye because `get-timeline` did not exist, and
@@ -3258,7 +3258,7 @@ description can carry**, and they are the whole reason this deliverable exists:
 1. **Workflow sequencing.** Each tool describes itself; nothing describes the lifecycle. That the
    hand-off is deliberately **two calls** — `set-journal-visibility` for access, `set-quest-progress`
    for status — and that skipping the second leaves an `UNDISCOVERED` badge on a quest the party can
-   already see. Franklin hit exactly this during the 7a.5 gate.
+   already see. The maintainer hit exactly this during the 7a.5 gate.
 2. **The journal-isolation rule.** Page ownership inside a _visible_ journal is not a security
    boundary, so spoiler-sensitive prep belongs in its **own** journal via `folder`, never co-located
    via `journalId`. The `folder` parameter says what it does, not why it is the safer choice — an
@@ -3269,7 +3269,7 @@ description can carry**, and they are the whole reason this deliverable exists:
 
 ##### Delivery: one file, pointed at — not copied
 
-**Franklin's correction, 2026-08-17.** An earlier draft of this section proposed a short "paste-ready"
+**The maintainer's correction, 2026-08-17.** An earlier draft of this section proposed a short "paste-ready"
 block to drop into the GM AI's project instructions. **That was wrong** — it reintroduces the second
 copy this deliverable exists to avoid. His mechanism instead:
 
@@ -3345,7 +3345,7 @@ Still out of scope after the tranche above. `achievement` needs **no new work** 
   text; a tool that manages counter state is separate. Note `@time[…]` requires **Simple
   Timekeeping**, which is _not installed_ — it renders a "Not Installed" label, so do not emit it.
 - **Custom page templates** — SQ scans a user `storage/` folder for extra `.html` templates, so
-  house styles Franklin authors could be applied by name.
+  house styles the maintainer authors could be applied by name.
 
 #### 7c — Other module-dependent backlog ⛔ BLOCKED (2026-08-15)
 
@@ -3359,7 +3359,7 @@ Still out of scope after the tranche above. `achievement` needs **no new work** 
 > whether they were still installed.
 >
 > There is therefore **no test target**, so 7c cannot be gated — and a gate that cannot fail is not
-> a gate. Franklin's call: **keep parked, install later.** Do not write these five tools until the
+> a gate. The maintainer's call: **keep parked, install later.** Do not write these five tools until the
 > modules are installed and their installed source has been read, per the standing rule.
 >
 > Generalise the check: this is the second backlog item found to be describing a world that no
@@ -3375,7 +3375,7 @@ strategy-decision-4 reason:
 - [ ] ⏸️ **`get-character` never reports initiative** — upstream pf2e adapter gap found in the Phase
       1.5 gate. **Parked 2026-08-15.**
 
-> **Cycle 6 parked, 2026-08-15 (Franklin).** Both items above, together. His challenge was the
+> **Cycle 6 parked, 2026-08-15 (the maintainer).** Both items above, together. His challenge was the
 > right one: _"in actual play, why would `get-character` need to report initiative? We have
 > `get-combat-tracker` and that's where initiative lives."_ Checking rather than arguing:
 >
@@ -3668,7 +3668,7 @@ Swarm`, `Hellknight` → `Skeletal Hellknight`, …). Worth generalising: **"lat
 > at the playlist call sites (cycle 3), but this is different code.
 >
 > **Process note:** the before-shot pushed adventure text to a connected player without warning
-> Franklin first. A gate for a tool whose whole purpose is broadcasting to players is
+> the maintainer first. A gate for a tool whose whole purpose is broadcasting to players is
 > player-visible by definition — say so before running it, not after.
 
 - [x] **`stop-playlist` on a named playlist returns no count** — both branches now report
@@ -3915,7 +3915,7 @@ rm "$TEMP/foundry-mcp-backend.lock" 2>/dev/null
 
 # 2. Build and deploy the server bundle
 npm run bundle:server && cp packages/mcp-server/dist/backend.bundle.cjs \
-  "C:/Users/Franklin Figueroa/AppData/Local/FoundryMCPServer/foundry-mcp-server/packages/mcp-server/dist/backend.bundle.cjs"
+  "%LOCALAPPDATA%/FoundryMCPServer/foundry-mcp-server/packages/mcp-server/dist/backend.bundle.cjs"
 
 # 3. Deploy the module too if it changed (matched-pair rule)
 #    → D:\FoundryData-Paizo\Data\modules\foundry-mcp-bridge

@@ -10,5 +10,5 @@ restoring from the backup, which also excludes it), run `npm install` in the
 project root before building or testing.
 
 The Foundry MCP server that the vaults use runs from
-`C:\Users\Franklin Figueroa\AppData\Local\FoundryMCPServer\`, not from this
+`%LOCALAPPDATA%\FoundryMCPServer\`, not from this
 folder, so the move did not affect it.

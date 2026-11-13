@@ -6656,7 +6656,7 @@ export class FoundryDataAccess {
   /**
    * Refuse `@time` in anything written into a page body.
    *
-   * **Franklin's decision, 2026-08-22: Simple Timekeeping is not being adopted, so `@time` is
+   * **The maintainer's decision, 2026-08-22: Simple Timekeeping is not being adopted, so `@time` is
    * permanently forbidden output rather than deferred.** He enabled the module to evaluate
    * it, found that its "Sync Weather & Darkness" option had written darkness levels onto the
    * scenes it touched, and declined it.

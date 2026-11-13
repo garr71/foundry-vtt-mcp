@@ -29,10 +29,10 @@
   conditions through the system API (`6cfc406`), packs with non-Latin1 labels (`052f107`), a new
   `create-chat-message` tool.
 - **Second GM:** an Assistant GM does **build-phase** prep from their own PC, with their own Claude
-  Code and MCP server, sometimes at the same time as Franklin. **Never two GMs during live play**,
+  Code and MCP server, sometimes at the same time as the maintainer. **Never two GMs during live play**,
   so play-time features (roll buttons, chat roll state) are out of scope for two-GM work. They reach
   Foundry over the home LAN by the host's private IP (plain HTTP). They get the same write
-  access as Franklin.
+  access as the maintainer.
 
 ## ⛔ Live breakage found 2026-11-13: the deployed module is stock upstream
 
@@ -65,12 +65,12 @@ Ship our v0.8.3 line first so play works today. The upstream 0.8.6 re-port is wo
 
 ### 2. Release tag for the second GM
 
-- Tag the restored build and **push it (ask Franklin first)**.
+- Tag the restored build and **push it (ask the maintainer first)**.
 - Fill in "Current build" in the second GM's setup doc in the play vault.
 - Correct that doc: updating the bridge from Foundry's module manager installs the wrong build for
-  **Franklin too**, not only the second GM (until step 1.1 lands, it is the cause of the breakage above).
+  **The maintainer too**, not only the second GM (until step 1.1 lands, it is the cause of the breakage above).
 
-**The second GM can start after this**, before workstream 3, with three interim rules: Franklin uses one GM
+**The second GM can start after this**, before workstream 3, with three interim rules: the maintainer uses one GM
 browser window only, nobody touches the bridge settings, and the two split work by area (folders or
 scenes) in the play vault.
 
@@ -86,7 +86,7 @@ scenes) in the play vault.
    same server.
 2. **Servers listen on every interface, not only localhost.** Port 31415 (`httpServer.listen(port)`,
    no host) and 31416 (`0.0.0.0`). On a shared LAN, a world `serverHost` other than `localhost`
-   would send the second GM's browser to Franklin's server (finding 1). Any LAN device can also reach them.
+   would send the second GM's browser to the maintainer's server (finding 1). Any LAN device can also reach them.
 3. **Every bridge setting is world-scoped**, including per-person state. One GM's failed reconnect
    writes `autoReconnectEnabled = false` for both (`foundry-module/src/main.ts` L379). Each GM's
    heartbeat writes `lastActivity` to the world database. Changing host, port or connection type
@@ -129,7 +129,7 @@ Note on 3.6: Foundry has no server-side compare-and-set, so a millisecond window
 check and write. Today the window is the whole of Claude's think time.
 
 **Upstream PR candidate:** 3.1, 3.3 and 3.4 fix generic bugs any multi-GM table hits. Contributing
-them would remove a permanent re-port cost. Franklin's call; never push to `upstream` from here.
+them would remove a permanent re-port cost. The maintainer's call; never push to `upstream` from here.
 
 ### 4. Re-port upstream v0.8.4 to v0.8.6
 
@@ -151,13 +151,13 @@ One cycle each:
 Read each module's installed source before designing anything (standing rule).
 
 - **Hexplorer** (`hexplorer` 3.0.4): **its own project, after workstreams 1 to 5 are done.** The
-  campaign Franklin plans to run features hexploration, so this is the likeliest source of new
+  campaign the maintainer plans to run features hexploration, so this is the likeliest source of new
   tools. Three steps, in order, each signed off before the next:
   1. **Research.** Read the installed module source: what it stores (scene flags, documents,
      settings), what API it exposes, how the GM drives it, and what pf2e's hexploration rules need
      that it does or does not model.
   2. **Plan.** Propose tools from what the GM actually does at the table, with gate designs. Write
-     it up here for Franklin's review.
+     it up here for the maintainer's review.
   3. **Execute.** One tool per cycle, gated live, as usual.
 - **Battlezoo Monster Parts** (`pf2e-monster-parts` 0.8.7 + `battlezoo-bestiary-pf2e` 2.9
   compendiums): **its own project, same footing as Hexplorer.** The campaign uses the subsystem
@@ -168,14 +168,14 @@ Read each module's installed source before designing anything (standing rule).
      _Monster Parts Subsystem_ rules journal. Pin down what the Hybrid variant changes, and where the
      reflavoring lives (in the module's data, or only at the table and in the vault).
   2. **Plan.** Propose tools from what the GM actually does during play and prep, with gate designs.
-     Write it up here for Franklin's review.
+     Write it up here for the maintainer's review.
   3. **Execute.** One tool per cycle, gated live.
 
   **Depends on workstream 5.** Two of its friction fixes (listing a pack's contents, and paging
   `get-compendium-entry-full`) are what let the MCP read the Battlezoo content at all. The rules
   journal alone is about 105k characters.
 
-Order between Hexplorer and Monster Parts is Franklin's call when workstream 5 is done.
+Order between Hexplorer and Monster Parts is the maintainer's call when workstream 5 is done.
 
 ## Parked backlog (carried from the archived plan)
 
@@ -195,7 +195,7 @@ Nothing here is scheduled. Each line says why it waits.
   `investigation` (mind-map), custom page templates from SQ's `storage/` folder.
 - **7c: Exalted Scenes + Narrator's Jukebox.** ⛔ Neither module is installed. Confirm a module is
   installed before scheduling work against it.
-- **sf2e adapter + sf2e creature index.** Deferred, not deleted. Do not start without Franklin.
+- **sf2e adapter + sf2e creature index.** Deferred, not deleted. Do not start without the maintainer.
 
 **Policy, not backlog:** `@time` stays **forbidden output** (Simple Timekeeping declined
 2026-08-22). See CLAUDE.md § Enforced policy.
